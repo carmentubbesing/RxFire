@@ -1,0 +1,102 @@
+---
+title: "CalMAPPER"
+output: 
+  html_document:
+    toc: TRUE
+date: '2022-07-26'
+---
+
+```{r, include = F}
+require(tidyverse)
+require(lubridate)
+require(sf)
+require(fs)
+```
+
+# Description
+
+This script merges CalMAPPER activity data with treatment polygons. This is a necessary step before analyzing prescribed fire data in CalMAPPER. 
+
+```{r}
+calmapper_files <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/CALFIRE spatial data/CalMAPPER/CALFIRE_FuelReductionProjects_2023/CALFIRE_FuelReductionProjects.gdb"
+```
+
+
+```{r}
+st_layers(calmapper_files)
+act <- st_read(calmapper_files, layer = 'CMDash_Activities')
+trt <- st_read(calmapper_files, layer = 'CMDash_TreatmentPols')
+```
+
+
+# Clean
+## Remove non-treatment "activities"
+```{r}
+act <- act %>% 
+  filter(!ACTIVITY_DESCRIPTION %in% c("GIS Validation", "Education Outreach", "Project Administration", "Planning Meeting", "Public Contacts", "Water Site Development"))
+```
+
+## Fix date format
+
+### Activities
+```{r}
+act <- act %>% 
+  mutate(ACTIVITY_START_date =  as.Date(ACTIVITY_START, format = "%m/%d/%Y")) %>% 
+  mutate(PROJECT_START_DATE_date =  as.Date(ACTIVITY_END, format = "%m/%d/%Y")) 
+```
+
+```{r}
+act <- act %>% 
+  mutate(ACTIVITY_START_date = if_else(is.na(ACTIVITY_START_date), PROJECT_START_DATE_date, ACTIVITY_START_date))
+```
+
+## Treatments
+
+# Sort by acreage
+```{r}
+act %>% 
+  filter(ACTIVITY_START_date > "2020-01-01" & ACTIVITY_START_date < "2020-12-31") %>% 
+  group_by(ACTIVITY_DESCRIPTION) %>% 
+  summarize(acres = sum(TREATED_ACRES)) %>% 
+  arrange(desc(acres)) %>% 
+  print(n = 35)
+```
+
+# Merge Rx fire Activity data with treatment polygons
+```{r}
+# join act with trt to get geometry. use projectID, treatmentID
+act_sf <- right_join(trt %>% select(PROJECT_ID, TREATMENT_ID), 
+           act)
+
+# clean up the data
+act_sf <- act_sf[!st_is_empty(act_sf),] # remove empties
+```
+
+# Save
+
+```{r}
+dsn <- "~/Reference data/CALFIRE spatial data/CalMAPPER/shapefiles"
+
+#st_write(act_sf, dsn = dsn, layer = "trt_act", driver = "ESRI Shapefile", delete_layer = T)
+```
+
+```{r}
+save(act_sf, file = "~/Reference data/CALFIRE spatial data/CalMAPPER/treatment-activities.Rdata")
+```
+
+```{r}
+write.csv(act_sf %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/activities.csv", row.names = F)
+write.csv(trt %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/treatments.csv", row.names = F)
+```
+
+# Are there Rx fires recorded in Treatments data but not in Activities data?
+```{r}
+act_sf %>% 
+  st_drop_geometry() %>% 
+  group_by(ACTIVITY_DESCRIPTION) %>% 
+  count()
+```
+
+```{r}
+```
+
