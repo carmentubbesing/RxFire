@@ -381,28 +381,12 @@ fire Activity data with treatment polygons</a></li>
 <p>This script merges CalMAPPER activity data with treatment polygons.
 This is a necessary step before analyzing prescribed fire data in
 CalMAPPER.</p>
-<pre class="r"><code># Carmen&#39;s local path
-calmapperDir_Carmen &lt;- &quot;C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/CALFIRE spatial data/CalMAPPER&quot;
-calmapperGDB_Carmen &lt;- file.path(calmapperDir_Carmen, &quot;CALFIRE_FuelReductionProjects_2023/CALFIRE_FuelReductionProjects.gdb&quot;)
-
-# Lisa&#39;s local path
-calmapperDir_Lisa &lt;- &quot;C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Local_reference_data/CalMAPPER&quot;
-calmapperGDB_Lisa &lt;- file.path(calmapperDir_Lisa, &quot;CALFIRE_FuelReductionProjects.gdb&quot;)
-
-# detect who&#39;s directory exists and use that one.
-if(fs::dir_exists(calmapperDir_Lisa)){
-  calmapper_files &lt;- calmapperGDB_Lisa
-  calmapper_dir &lt;- calmapperDir_Lisa
-  print(calmapper_dir)
-} else{
-  if(fs::dir_exists(calmapperDir_Carmen)){
-    calmapper_files &lt;- calmapperGDB_Carmen
-    calmapper_dir &lt;- calmapperDir_Carmen
-    print(calmapper_dir)
-  }
-  else stop(&quot;You don&#39;t have any existing paths containing the data.&quot;)
+<pre class="r"><code># define path to Calmapper and to the gdb file
+calmapper_dir &lt;- fs::dir_ls(ref_path, recurse = T, glob = &#39;*CalMAPPER&#39;, type = &#39;directory&#39;)
+calmapper_files &lt;- fs::dir_ls(calmapper_dir, recurse = T, glob = &#39;*.gdb&#39;)
+if(length(calmapper_files) &gt; 1){
+  stop( &quot;There&#39;s more than one CalMAPPER .gdb file. script assumes only 1.&quot;)
 }</code></pre>
-<pre><code>## [1] &quot;C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Local_reference_data/CalMAPPER&quot;</code></pre>
 <pre class="r"><code>st_layers(calmapper_files)</code></pre>
 <pre><code>## Driver: OpenFileGDB 
 ## Available layers:

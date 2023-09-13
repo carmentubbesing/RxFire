@@ -20,26 +20,12 @@ require(fs)
 This script merges CalMAPPER activity data with treatment polygons. This is a necessary step before analyzing prescribed fire data in CalMAPPER. 
 
 ```{r}
-# Carmen's local path
-calmapperDir_Carmen <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/CALFIRE spatial data/CalMAPPER"
-calmapperGDB_Carmen <- file.path(calmapperDir_Carmen, "CALFIRE_FuelReductionProjects_2023/CALFIRE_FuelReductionProjects.gdb")
 
-# Lisa's local path
-calmapperDir_Lisa <- "C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Local_reference_data/CalMAPPER"
-calmapperGDB_Lisa <- file.path(calmapperDir_Lisa, "CALFIRE_FuelReductionProjects.gdb")
-
-# detect who's directory exists and use that one.
-if(fs::dir_exists(calmapperDir_Lisa)){
-  calmapper_files <- calmapperGDB_Lisa
-  calmapper_dir <- calmapperDir_Lisa
-  print(calmapper_dir)
-} else{
-  if(fs::dir_exists(calmapperDir_Carmen)){
-    calmapper_files <- calmapperGDB_Carmen
-    calmapper_dir <- calmapperDir_Carmen
-    print(calmapper_dir)
-  }
-  else stop("You don't have any existing paths containing the data.")
+# define path to Calmapper and to the gdb file
+calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
+calmapper_files <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
+if(length(calmapper_files) > 1){
+  stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
 }
 
 ```
