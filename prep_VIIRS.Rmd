@@ -42,6 +42,7 @@ CA <- st_read(ca_path)
 ```
 
 # Crop to CA and mask out agriculture
+
 Just include VIIRS and crop data to CA. Remove VIIRS points in agricultural areas according to the 2020 CDL dataset. I omitted crops (except Xmas tree farms), development, and water. Keeping wildlands and "pasture/grass".
 
 ```{r}
@@ -83,7 +84,9 @@ viirs_list_nonAg <- map2(cdl_CA_mask, viirs_list_CA, f_extract) %>%
 ```
 
 # clean up VIIRS data
+
 Fix time variables (UTC instead of local), merge satellites
+
 ```{r}
 # let's merge Suomi and NOAA-20 satellites
 viirs_nonAg <- bind_rows(viirs_list_nonAg)
@@ -122,7 +125,9 @@ viirs_nonAg %>%
 ```
 
 # Check out the spatial distribution of VIIRS data
+
 For a quick look, let's look at just one week...Aug1-15 2020.
+
 ```{r}
 
 viirs_filtered <- viirs_nonAg %>% 
@@ -132,6 +137,7 @@ mapview::mapview(viirs_filtered, zcol = 'jday', cex = 3)
 ```
 
 # Export data
+
 ```{r}
 
 # viirs--CA, non-Ag
@@ -141,4 +147,3 @@ write_rds(viirs_nonAg, file = file.path(viirs_dir, 'viirs_nonAg.rds'))
 writeRaster(cdl_CA_mask, file.path(ref_path, "NASS/CDL/cropmask_2020.tif"))
 
 ```
-
