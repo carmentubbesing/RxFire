@@ -1,0 +1,144 @@
+---
+title: "VIIRS prep and overview"
+author: "Lisa Rosenthal"
+date: "2023-09-13"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf)
+library(terra)
+library(fs)
+library(tidyverse)
+```
+
+# Goal
+
+-   Check out how VIIRS data in 2020 is spatially distributed across CA
+-   Mask out crop areas in order to compare to CalMAPPER, etc.
+-   See if there's an easy way to detect "persistent points" as a way to potentially limit false fire detections
+
+# Import Data
+
+```{r}
+
+# VIIRS fire detects
+viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
+viirs_shps <- dir_ls(viirs_dir, recurse = T, glob = '*.shp')
+viirs_list <- map(viirs_shps, st_read) %>% 
+  set_names(c('NOAA', 'Suomi'))
+
+# crop layer
+cdl_path <- file.path(ref_path, "NASS/CDL/2020_30m_cdls") %>% dir_ls(glob = '*.tif')
+cdl <- rast(cdl_path)
+
+# California boundary
+ca_path <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
+CA <- st_read(ca_path)
+
+```
+
+# Crop to CA and mask out agriculture
+Just include VIIRS and crop data to CA. Remove VIIRS points in agricultural areas according to the 2020 CDL dataset. I omitted crops (except Xmas tree farms), development, and water. Keeping wildlands and "pasture/grass".
+
+```{r}
+# transform vector layers to raster crs
+CA_t <- st_transform(CA, crs(cdl))
+viirs_list_t <- map(viirs_list, ~ st_transform(.x, crs(cdl)))
+
+# crop VIIRS to CA boundary
+viirs_list_CA <- map(viirs_list_t, ~ .x[CA_t, ])
+
+# crop CDL to CA boundary
+cdl_CA <- crop(cdl, CA_t)
+
+# create a crop mask
+levels_table <- levels(cdl_CA)[[1]]
+head(levels_table)
+# levels_table$Class_Names
+
+# make a vector containing the classes you want to keep
+nonAgVeg <- c('Pasture/Grass', 'Forest', "Shrubland", "Barren", "Christmas Trees",
+              "Nonag/Undefined", "Deciduous Forest", "Evergreen Forest", "Mixed Forest",
+              "Grassland/Pasture", "Woody Wetlands", "Herbaceous Wetlands"
+              )
+nonAgVeg_values <- levels_table$value[levels_table$Class_Names %in% nonAgVeg]
+
+# reclassify the raster to be non-ag vs. not
+mat1 <- cbind(nonAgVeg_values, 1)
+cdl_CA_mask <- classify(cdl_CA, mat1, others = 0)
+plot(cdl_CA_mask)
+
+# remove VIIRS points outside the non-ag area
+f_extract <- function(mask, points){
+  vals <- extract(mask, points)
+  nonAg_points <- points[vals$Class_Names == 1,]
+  return(nonAg_points)
+}
+viirs_list_nonAg <- map2(cdl_CA_mask, viirs_list_CA, f_extract) %>% 
+  set_names(names(viirs_list_CA))
+```
+
+# clean up VIIRS data
+Fix time variables (UTC instead of local), merge satellites
+```{r}
+# let's merge Suomi and NOAA-20 satellites
+viirs_nonAg <- bind_rows(viirs_list_nonAg)
+
+# transform back into original crs too
+viirs_nonAg <- st_transform(viirs_nonAg, st_crs(viirs_list$NOAA))
+
+# get datetime in PST. time / date currently in UTC.
+viirs_nonAg <- viirs_nonAg %>%
+  mutate(
+    # get datetime in PST
+    .before = ACQ_DATE,
+    hour = str_sub(ACQ_TIME, 1, 2),
+    minute = str_sub(ACQ_TIME, 3, 4),
+    time = paste(hour, minute, sep = ':'),
+    datetime = ymd_hm(paste(ACQ_DATE, time)) %>% with_tz('US/Pacific'),
+    date = date(datetime),
+    # detects in the middle of the night (e.g. 3am) should be considered night before
+    date_adj = case_when(DAYNIGHT == 'N' ~ date - 1, T ~ date),
+    jday = yday(date),
+    jday_adj = ifelse(DAYNIGHT == 'N', jday - 1, jday),
+    jday_daynight_adj = paste(jday_adj, DAYNIGHT, sep = '_')
+  ) %>%
+  select(-c(hour, minute, time, ACQ_DATE, ACQ_TIME)) 
+
+# dummy check that the time makes sense
+viirs_nonAg %>% 
+  as_tibble %>% 
+  sample_n(4000) %>% 
+  mutate(hour = hour(datetime)) %>% 
+  ggplot(aes(DAYNIGHT, hour)) +
+  geom_jitter() +
+  labs(title = 'Dummy checking time conversion', 
+       subtitle = '**PST hour is consistent with DAYNIGHT column')
+
+```
+
+# Check out the spatial distribution of VIIRS data
+For a quick look, let's look at just one week...Aug1-15 2020.
+```{r}
+
+viirs_filtered <- viirs_nonAg %>% 
+  filter(month(datetime) == 8, day(datetime) <= 15)
+mapview::mapview(viirs_filtered, zcol = 'jday', cex = 3)
+
+```
+
+# Export data
+```{r}
+
+# viirs--CA, non-Ag
+write_rds(viirs_nonAg, file = file.path(viirs_dir, 'viirs_nonAg.rds'))
+
+# crop mask
+writeRaster(cdl_CA_mask, file.path(ref_path, "NASS/CDL/cropmask_2020.tif"))
+
+```
+
