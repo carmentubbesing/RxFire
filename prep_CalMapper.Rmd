@@ -72,31 +72,66 @@ act_sf <- right_join(trt %>% select(PROJECT_ID, TREATMENT_ID),
 act_sf <- act_sf[!st_is_empty(act_sf),] # remove empties
 ```
 
-# Save
-
-```{r}
-dsn <- "~/Reference data/CALFIRE spatial data/CalMAPPER/shapefiles"
-
-#st_write(act_sf, dsn = dsn, layer = "trt_act", driver = "ESRI Shapefile", delete_layer = T)
-```
-
-```{r}
-save(act_sf, file = "~/Reference data/CALFIRE spatial data/CalMAPPER/treatment-activities.Rdata")
-```
-
-```{r}
-write.csv(act_sf %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/activities.csv", row.names = F)
-write.csv(trt %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/treatments.csv", row.names = F)
-```
-
-# Are there Rx fires recorded in Treatments data but not in Activities data?
+# Filter to fire and to completed treatments
 ```{r}
 act_sf %>% 
   st_drop_geometry() %>% 
   group_by(ACTIVITY_DESCRIPTION) %>% 
-  count()
+  count() %>% 
+  print(n=50)
 ```
 
 ```{r}
+act_sf_fire <- 
+  act_sf %>% 
+  filter(ACTIVITY_DESCRIPTION %in% c("Broadcast Burn", "Cultural Burning", "Pile Burning", "Site Preparation (RxBurn)"))
 ```
 
+# Save
+```{r}
+save(act_sf, file = "~/Reference data/CALFIRE spatial data/CalMAPPER/activities_fire.Rdata")
+```
+
+```{r}
+write.csv(act_sf %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/activities_fire.csv", row.names = F)
+write.csv(trt %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/treatments_fire.csv", row.names = F)
+```
+
+# Are there Rx fires recorded in Treatments data but not in Activities data?
+```{r}
+act_broadcast <- act_sf %>% 
+  filter(ACTIVITY_DESCRIPTION == "Broadcast Burn")
+```
+
+
+```{r}
+trt %>% 
+  st_drop_geometry() %>% 
+  group_by(TREATMENT_OBJECTIVE) %>% 
+  count()
+```
+
+
+```{r}
+trt_broadcast <- trt %>% 
+  filter(TREATMENT_OBJECTIVE == "Broadcast Burn") %>% 
+  filter(ACTIVITY_STATUS == "Complete")
+```
+
+## Check if there are treatment IDs in `act_broadcast` that aren't in `trt_broadcast`
+```{r}
+act_broadcast %>% 
+  filter(!TREATMENT_ID %in% trt_broadcast$TREATMENT_ID)
+```
+
+```{r}
+act_broadcast %>% 
+  filter(!TREATMENT_NAME %in% trt_broadcast$TREATMENT_NAME)
+```
+
+```{r}
+map <- mapview(list(trt_broadcast, act_broadcast), col.regions=list("red","blue"),col=list("red","blue"))
+map
+```
+
+It's safe to use the Activities information and not the Treatment information.
