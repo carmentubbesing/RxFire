@@ -4,6 +4,8 @@ output:
   html_document:
     toc: TRUE
 date: '2022-07-26'
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r, include = F}
@@ -18,7 +20,14 @@ require(fs)
 This script merges CalMAPPER activity data with treatment polygons. This is a necessary step before analyzing prescribed fire data in CalMAPPER. 
 
 ```{r}
-calmapper_files <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/CALFIRE spatial data/CalMAPPER/CALFIRE_FuelReductionProjects_2023/CALFIRE_FuelReductionProjects.gdb"
+
+# define path to Calmapper and to the gdb file
+calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
+calmapper_files <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
+if(length(calmapper_files) > 1){
+  stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
+}
+
 ```
 
 
@@ -75,28 +84,21 @@ act_sf <- act_sf[!st_is_empty(act_sf),] # remove empties
 # Save
 
 ```{r}
-dsn <- "~/Reference data/CALFIRE spatial data/CalMAPPER/shapefiles"
-
+#dsn <- file.path(calmapper_dir, "shapefiles")
 #st_write(act_sf, dsn = dsn, layer = "trt_act", driver = "ESRI Shapefile", delete_layer = T)
 ```
 
 ```{r}
-save(act_sf, file = "~/Reference data/CALFIRE spatial data/CalMAPPER/treatment-activities.Rdata")
+# I've always saved .rds files instead... .Rdata loads the workspace???
+# save(act_sf, file = file.path(calmapper_dir, "treatment-activities.Rdata") )
+write_rds(act_sf, file = file.path(calmapper_dir, "treatment-activities.rds"))
+
 ```
 
 ```{r}
-write.csv(act_sf %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/activities.csv", row.names = F)
-write.csv(trt %>% st_drop_geometry(), file = "~/Reference data/CALFIRE spatial data/CalMapper/treatments.csv", row.names = F)
+write_csv(act_sf %>% st_drop_geometry(), 
+          file = file.path(calmapper_dir, "activities.csv"))
+          
+write_csv(trt %>% st_drop_geometry(),
+          file = file.path(calmapper_dir, "treatments.csv"))
 ```
-
-# Are there Rx fires recorded in Treatments data but not in Activities data?
-```{r}
-act_sf %>% 
-  st_drop_geometry() %>% 
-  group_by(ACTIVITY_DESCRIPTION) %>% 
-  count()
-```
-
-```{r}
-```
-
