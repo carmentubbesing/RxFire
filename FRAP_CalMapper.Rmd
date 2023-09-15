@@ -1,0 +1,23 @@
+---
+title: "FRAP_CalMapper"
+output: 
+  html_document:
+    toc: TRUE
+date: "2023-09-15"
+---
+
+```{r, include = F}
+require(sf)
+require(tidyverse)
+```
+
+# Load data
+
+## FRAP
+```{r}
+load(file = "Rdata/frap_2020_dis_Rx.Rdata")
+load(file = "Rdata/frap_2020_Rx.Rdata")
+```
+
+## CalMapper
+
