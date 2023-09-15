@@ -24,17 +24,17 @@ This script merges CalMAPPER activity data with treatment polygons. This is a ne
 # Define path to Calmapper and to the gdb file
 ```{r}
 calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
-calmapper_files <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
-if(length(calmapper_files) > 1){
+calmapper_gdb <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
+if(length(calmapper_gdb) > 1){
   stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
 }
 
 ```
 
 ```{r}
-st_layers(calmapper_files)
-act <- st_read(calmapper_files, layer = 'CMDash_Activities')
-trt <- st_read(calmapper_files, layer = 'CMDash_TreatmentPols')
+st_layers(calmapper_gdb)
+act <- st_read(calmapper_gdb, layer = 'CMDash_Activities')
+trt <- st_read(calmapper_gdb, layer = 'CMDash_TreatmentPols')
 ```
 
 
@@ -66,7 +66,7 @@ act_sf %>%
 ```{r}
 act_sf_fire <- 
   act_sf %>% 
-  filter(ACTIVITY_DESCRIPTION %in% c("Broadcast Burn", "Cultural Burning", "Pile Burning", "Site Preparation (RxBurn)"))
+  filter(ACTIVITY_DESCRIPTION %in% c("Broadcast Burn", "Cultural Burning", "Pile Burning"))
 ```
 
 # Create DURATION and YEAR columns
@@ -90,6 +90,7 @@ act_sf_fire %>%
   head() %>% 
   nrow()
 ```
+
 
 # Save
 ```{r}
@@ -167,6 +168,24 @@ map
 ```
 
 It's safe to use the Activities information and not the Treatment information.
+
+
+# Write activities data to gdb
+```{r}
+st_write(act_sf_fire, dsn = calmapper_gdb, layer = "CalMapper_fire_act")
+```
+
+
+# Remove duplicates from activities data
+```{r}
+act_sf_fire %>% 
+  filter(duplicated(SHAPE) & duplicated(YEAR) & duplicated(ACTIVITY_DESCRIPTION)) %>% 
+  arrange(SHAPE) %>% 
+  select(PROJECT_ID, TREATMENT_ID, ACTIVITY_ID, AQ_ID, PROJECT_NAME, TREATMENT_NAME, ACTIVITY_NAME, ACTIVITY_DESCRIPTION, )
+```
+
+
+
 
 # Save 2020 to use for Venn Diagram
 ```{r}

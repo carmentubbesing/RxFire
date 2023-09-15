@@ -9,15 +9,72 @@ date: "2023-09-15"
 ```{r, include = F}
 require(sf)
 require(tidyverse)
+require(mapview)
+require(VennDiagram)
 ```
 
 # Load data
-
-## FRAP
 ```{r}
 load(file = "Rdata/frap_2020_dis_Rx.Rdata")
-load(file = "Rdata/frap_2020_Rx.Rdata")
+load(file = "Rdata/CalMapper_activities_fire_2020.Rdata")
 ```
 
-## CalMapper
+# Transform to match
+```{r}
+frap_20_diss <- st_transform(frap_diss_2020, st_crs(act_2020))
+```
+
+# Visualize
+```{r}
+#mapview(list(frap_20_diss, act_2020, overlaps), col.regions=list("red","blue", "green"),col=list("red","blue", "green"))
+```
+
+# It's too impossible to actually find overlaps of activity acres so I'm going to stick with dissolving them and finding footprint acreage overlap
+
+## Dissolve 
+```{r}
+act_20_diss <- act_2020 %>% 
+  st_union()
+```
+
+## Overlap
+```{r}
+overlap <- st_intersection(frap_20_diss, act_20_diss)
+overlap_ha <- as.numeric(st_area(overlap)/10000) %>% 
+  round()
+overlap_ha
+```
+
+## Find areas of each
+```{r}
+frap_20_ha <- as.numeric(st_area(frap_20_diss)/10000) %>% 
+  round()
+calmapper_20_ha <- as.numeric(st_area(act_20_diss)/10000) %>% 
+  round()
+```
+
+```{r}
+paste("total area of FRAP dissolved polygons is", frap_20_ha, "ha")
+paste("total area of CAL MAPPER dissolved polygons is", calmapper_20_ha, "ha")
+```
+
+# Function to make Venn diagram
+```{r}
+venn_calmap <- function(){
+  grid.newpage()
+  draw.pairwise.venn(area1 = frap_20_ha,
+                   area2 = calmapper_20_ha,
+                   cross.area = overlap_ha,
+                   #category = c("", ""),
+                   fill = c("red", "green"),
+                   cex = 1)
+}
+```
+
+```{r}
+file <- "Venn_FRAP_CalMAPPER.jpeg"
+grid.newpage()
+png(file = file, width = 1000, height = 1000)
+venn_calmap()
+```
 

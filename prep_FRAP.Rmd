@@ -60,14 +60,7 @@ frap <- frap %>%
 summary(as.factor(frap$treatment_type))
 ```
 
-
-# transform
-```{r}
-frap <- st_transform(frap, crs = 3310)
-```
-
-
-### Save for statewide analysis
+# Save for statewide analysis
 
 ```{r}
 file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata", sep = "")

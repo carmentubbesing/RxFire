@@ -405,14 +405,10 @@ if(length(frap_dir) &gt; 1){
 </div>
 </div>
 </div>
-<div id="transform" class="section level1">
-<h1>transform</h1>
-<pre class="r"><code>frap &lt;- st_transform(frap, crs = 3310)</code></pre>
-<div id="save-for-statewide-analysis" class="section level3">
-<h3>Save for statewide analysis</h3>
+<div id="save-for-statewide-analysis" class="section level1">
+<h1>Save for statewide analysis</h1>
 <pre class="r"><code>file &lt;- paste(ref_path, &quot;/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata&quot;, sep = &quot;&quot;)
 save(frap, file = file)</code></pre>
-</div>
 </div>
 <div id="dissolve-by-year" class="section level1">
 <h1>Dissolve by year</h1>
