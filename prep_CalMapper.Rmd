@@ -4,6 +4,8 @@ output:
   html_document:
     toc: TRUE
 date: '2022-07-26'
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r, include = F}
@@ -11,16 +13,23 @@ require(tidyverse)
 require(lubridate)
 require(sf)
 require(fs)
+require(mapview)
 ```
 
 # Description
 
 This script merges CalMAPPER activity data with treatment polygons. This is a necessary step before analyzing prescribed fire data in CalMAPPER. 
 
-```{r}
-calmapper_files <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/CALFIRE spatial data/CalMAPPER/CALFIRE_FuelReductionProjects_2023/CALFIRE_FuelReductionProjects.gdb"
-```
 
+# Define path to Calmapper and to the gdb file
+```{r}
+calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
+calmapper_files <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
+if(length(calmapper_files) > 1){
+  stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
+}
+
+```
 
 ```{r}
 st_layers(calmapper_files)
