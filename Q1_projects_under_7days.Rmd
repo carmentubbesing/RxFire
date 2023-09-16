@@ -1,0 +1,365 @@
+---
+title: "Q1_projects_under_7days"
+author: "Lisa Rosenthal"
+date: "2023-09-14"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(fs)
+library(units)
+library(mapview)
+theme_set(theme_bw() + theme(panel.grid.minor = element_blank()))
+
+```
+
+# Question #1
+
+For burn projects that were wrapped up in less than a week:
+
+a.) How well did the number of days for which thermal anomalies were detected corroborate with the number of days that burners indicated in their project reporting?
+
+b.) Is there an apparent detection limit (e.g., acres burned or some other metric) under which the satellite does not seem to perform well in terms of picking up thermal anomaly? How does the finding different for broadcast burn vs. pile burn projects? How does the apparent detection limit compare to the US EPA's Rx burn reporting thresholds (50-acre for broadcast burn; 25-acre for pile burn)?
+
+## Approach
+
+-   Using CalMAPPER data, keep only treatments that 1) included Rx burns, 2) lasted 7 or fewer days
+-   Filter out all VIIRS points outside CalMAPPER polygons
+-   for each polygon, sum together the number of unique days with CalMAPPER activity
+-   Do the same for VIIRS points within each polygon.
+-   Calculate the difference in duration and look at the distribution.
+
+## Import data
+
+```{r}
+
+# VIIRS fire detects
+viirs <- read_rds(file.path(ref_path, 'VIIRS/CA_2020/viirs_nonAg.rds')) 
+
+# CalMAPPER data
+CM <- read_rds(file.path(ref_path, 'CalMAPPER/treatment-activities.rds'))
+
+```
+
+## Prep CalMAPPER data
+
+Just get burn data out of CalMAPPER.
+
+```{r}
+# check if cultural burning can be either pile burn or broadcast. all broadcast this year at least.
+CM %>% 
+  as_tibble %>% 
+  filter(ACTIVITY_DESCRIPTION == 'Cultural Burning') %>% 
+  distinct(ACTIVITY_DESCRIPTION, ACTIVITY_NAME)
+
+# CalMAPPER -- <= 7 days, trts include burns
+CM_burn <- CM %>% 
+  # create columns for burn activity
+   mutate(burn = ACTIVITY_DESCRIPTION %in% 
+           c('Broadcast Burn', 'Cultural Burning', 'Pile Burning'),
+          pile_burn = ACTIVITY_DESCRIPTION == 'Pile Burning', 
+          broadcast_burn = ACTIVITY_DESCRIPTION %in% 
+            c('Broadcast Burn', 'Cultural Burning'),
+         .after = AQ_ID) %>% 
+  # get duration of burn activities. +1 to duration (e.g. 2/1-2/1 = 0. It should be 1 day.) 
+  mutate(duration = difftime(ACTIVITY_END, ACTIVITY_START, units = 'days') + 1) %>% 
+  # include only burn activity
+  filter(burn == T) %>% 
+  # get area of treatment too. might be useful
+  mutate(trt_acres = units::set_units(st_area(.), 'acres') ) %>% 
+  # keep only the useful columns
+  select(TREATMENT_ID, AQ_ID, burn:broadcast_burn, TREATMENT_NAME, ACTIVITY_NAME, ACTIVITY_DESCRIPTION, ACTIVITY_START, ACTIVITY_END, duration, ACTIVITY_STATUS, TREATED_ACRES, trt_acres, BROAD_VEG_TYPE, AGENCY_NAME, FY)
+```
+
+Just look at projects from 2020. CalMAPPER is supposed to be complete only FY19/20 and up. I downloaded VIIRS data from Jan1-Dec31. Check out the projects that span calendar years in and out of 2020... If project spans calendar year, the start date is always on Dec 31st. Seems like a default value.
+
+Update: Dec 31 1600 PST is the same as Jan 1 0000 UTC. It seems like a default value whenever the start date isn't known. So, remove the 2021 start dates, but 12/31/2019 starts are ok.
+
+```{r}
+
+# projects spanning 2020 calendar year
+CM_burn %>% 
+  filter(year(ACTIVITY_END) > 2020 & year(ACTIVITY_START) == 2020 |
+           year(ACTIVITY_START) < 2020 & year(ACTIVITY_END) == 2020) %>% 
+  pull(ACTIVITY_START) %>% 
+  unique
+
+# filter just 2020
+CM_burn2020 <- CM_burn %>% 
+  filter(year(ACTIVITY_END) == 2020) 
+
+```
+
+Let's also just look at the distribution of start and end dates. Are their common dates that the records tend to show? Spikes in the figure would indicate inaccurate dates.
+
+```{r}
+
+CalMapper_dates <- cowplot::plot_grid(
+  ggplot(CM_burn, aes(ACTIVITY_START)) +
+  geom_bar(),
+ggplot(CM_burn, aes(ACTIVITY_END)) +
+  geom_bar(),
+nrow = 2
+)
+ggsave(plot = CalMapper_dates, 
+       filename = 'tmp_outputs/CalMAPPER_activity_dates.png', width = 6, height = 4)
+  
+```
+
+This data set has 2 treatments that have the exact same geometries, even though they have different ID numbers. This will cause issues when trying to count the number of unique fire detect days within the polygons. e.g. one treatment has a burn in january and the other treatment has burns from feb-may. The additional detects will seem anomolous for the first treatment, when in fact it should be part of the second treatment.
+
+Since there are only 2 treatments that are duplicated, manually merge them. In the future, manual cleaning up of the data should be avoided.
+
+```{r}
+
+# calmapper treatment ids. 
+CM_trtIDs <- CM_burn2020 %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise()
+
+# find which rows have duplicates
+mat_eq <- st_equals(CM_trtIDs, sparse = F, remove_self = T)
+duplicated_trts <- CM_trtIDs$TREATMENT_ID[apply(mat_eq, 1, sum) == 1] 
+CM_burn2020 %>% filter(TREATMENT_ID %in% c(duplicated_trts))
+
+# change the duplicated treatment ID
+CM_burn2020$TREATMENT_ID[CM_burn2020$TREATMENT_ID == 9553] <- 14544
+
+# rerun to update
+CM_trtIDs <- CM_burn2020 %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise()
+
+```
+
+Export this data so that you can use it for the other questions.
+
+```{r}
+write_rds(CM_burn2020, file.path(ref_path, 'CalMAPPER/burnactivities_2020.rds'))
+write_rds(CM_trtIDs, file.path(ref_path, 'CalMAPPER/treatmentgeometries_2020.rds'))
+```
+
+Since I'm going to filter the VIIRS detections based on the CalMAPPER polygons, I should create a dataset with polygons with an extra buffer, where the radius is half that of the VIIRS resolution. This is just in case there's a VIIRS detection right outside the polygon--I don't want to miss that. And export.
+
+```{r}
+# buffer polygons
+st_crs(CM_burn2020)$units # make sure buffer will be in meters
+CM_burn2020_buffered <- st_buffer(CM_burn2020, 375/2) 
+CM_trtIDs_buffered <- CM_burn2020_buffered %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise()
+# export
+write_rds(CM_burn2020_buffered, file.path(ref_path, 'CalMAPPER/burnactivities_2020_buffered.rds'))
+write_rds(CM_trtIDs_buffered, file.path(ref_path, 'CalMAPPER/treatmentgeometries_2020_buffered.rds'))
+
+```
+
+Finally, keep treatments where burn activity was \<= 7 days.
+
+```{r}
+CM_7days <- CM_burn2020_buffered %>% 
+  filter(duration <= 7)
+```
+
+## Prep VIIRS data
+
+Filter out VIIRS data outside of the the CalMAPPER polygons. I'm using the buffered CalMAPPER polygons.
+
+```{r}
+# get the viirs points contained in the treatment polygons
+viirs_t <- st_transform(viirs, st_crs(CM_7days))
+
+# calmapper treatment ids. 
+CM_7days_trtIDs <- filter(CM_trtIDs_buffered, TREATMENT_ID %in% unique(CM_7days$TREATMENT_ID))
+# CM_7days_trtIDs_unbuff <- filter(CM_trtIDs, TREATMENT_ID %in% unique(CM_7days$TREATMENT_ID))
+# mapview(CM_7days_trtIDs) + mapview(CM_7days_trtIDs_unbuff)
+
+
+# find those that intersect
+viirs_int <- st_intersection(viirs_t, CM_7days_trtIDs) %>% 
+  mutate(rowname = rownames(.), 
+         pointID = floor(as.numeric(rowname)),
+         overlap_trts = grepl('\\.', rowname),
+         .before = LATITUDE) %>% 
+  group_by(pointID) %>% 
+  mutate(overlap_trts = any(overlap_trts == T)) %>% 
+  ungroup()
+
+```
+
+Find if any points sit on overlapping treatment. It looks like a handful of VIIRS points intersect overlapping polygons. This seems to often happen when there's burn prep ahead of a broadcast burn. Out of the 1463 VIIRS points that intersect the CalMAPPER polygons, only 101 (7% of detects) are over overlapping treatments. Ignore for now and add a caveat for potential artifacts?
+
+```{r}
+# find if any points sit on overlapping treatment
+viirs_overlap <- filter(viirs_int, overlap_trts == T)
+
+# number of viirs points vs those that overlap polygons
+viirs_int %>% 
+  as_tibble() %>% 
+  distinct(pointID, .keep_all = T) %>% 
+  count(overlap_trts)
+
+# visualize
+mapview::mapview(viirs_overlap, cex = 3, zcol = 'TREATMENT_ID', legend = F) + 
+  mapview::mapview(CM_7days, zcol = 'TREATMENT_NAME', legend= F, alpha.regions = 0.3)
+
+
+```
+
+## Q1a
+
+*How well did the number of days for which thermal anomalies were detected corroborate with the number of days that burners indicated in their project reporting?*
+
+For every treatment polygon, calculate the total duration of burning activity and number of unique days for intersecting VIIRS detections. Compare the two calculations. I also want to look at timing.
+
+```{r}
+
+# duration + timing of CalMAPPER
+CM_duration_timing <- CM_7days %>% as_tibble %>% 
+  mutate(mean_jday = (yday(ACTIVITY_START) + yday(ACTIVITY_END))/2) %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise(CM_days = as.integer(sum(duration)), 
+            CM_mean_jday = mean(mean_jday))
+
+CM_vs_viirs_7d <- viirs_int %>% as_tibble() %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise(n_viirs = n(),
+            viirs_days = length(unique(jday)), 
+            viirs_mean_jday = mean(jday)
+            ) %>% 
+  right_join(CM_duration_timing) %>% 
+  mutate(days_diff = CM_days - viirs_days,
+         days_diff_abs = abs(days_diff), 
+         jdays_diff = CM_mean_jday - viirs_mean_jday,
+         jdays_diff_abs = abs(jdays_diff))
+
+
+```
+
+Visualize: 1) How treatment duration and timing differs between CalMAPPER records and VIIRS detections.
+
+```{r}
+# distribution of viirs vs CM # of burn days. seems like in general little bias, with some treatments with way more activity recorded in CalMAPPER
+p1 <- ggplot(CM_vs_viirs_7d, aes(days_diff)) +
+  geom_rect(aes(xmin = -Inf, xmax = 0, ymin = -Inf, ymax = Inf), fill = "lightcyan2") +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = -Inf, ymax = Inf), fill = "indianred1") +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9) +
+  geom_vline(xintercept = 0, lty = 2) +
+  labs(x = "Difference between treatment duration \n(CalMAPPER - VIIRS)", 
+       y = "# of treatments") +
+  scale_x_continuous(n.breaks = 10)
+
+# look at the absolute differences
+q90 <- quantile(CM_vs_viirs_7d$days_diff_abs, .9, na.rm = T) 
+p2 <- ggplot(CM_vs_viirs_7d, aes(days_diff_abs)) +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9, binwidth = 1)+
+  geom_vline(xintercept = q90, lty = 2) +
+  geom_text(aes(label = glue::glue("90th percentile of treatments \n(i.e. Between datasets, discrepency in duration \nusually under {q90} days)")), 
+            x = q90 + 1, y = 15, size = 2.5, hjust = 0) +
+  scale_x_continuous(n.breaks = 10) +
+  labs(x = 'Absolute difference in treatment duration \n(|CalMAPPER - VIIRS|)',
+       y = '# of treatments')
+
+cowplot::plot_grid(p1, p2, rows = 1, scale = .85) +
+  cowplot::draw_text('Number of burning days: CalMAPPER vs. VIIRS', y = .95)
+```
+
+Duration might look ok, but what about timing? Not great!
+
+```{r}
+# differences in mean day of the year
+p1 <- ggplot(CM_vs_viirs_7d, aes(jdays_diff)) +
+  geom_rect(aes(xmin = -Inf, xmax = 0, ymin = -Inf, ymax = Inf), fill = "lightcyan2") +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = -Inf, ymax = Inf), fill = "indianred1") +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9) +
+  geom_vline(xintercept = 0, lty = 2) +
+  labs(x = "DDifference between treatment's avg julian day \n(CalMAPPER - VIIRS)", 
+       y = "# of treatments") +
+  scale_x_continuous(n.breaks = 10)
+
+# look at the absolute differences
+q90 <- quantile(CM_vs_viirs_7d$jdays_diff_abs, .9, na.rm = T) 
+q50 <- quantile(CM_vs_viirs_7d$jdays_diff_abs, .5, na.rm = T) 
+p2 <- ggplot(CM_vs_viirs_7d, aes(jdays_diff_abs)) +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9, binwidth = 1)+
+  geom_vline(xintercept = c(q50, q90), lty = 2) +
+  geom_text(aes(label = glue::glue("90th percentile \n(i.e. ~{round(q90)} days)")), 
+            x = q90 + 5, y = 15, size = 2.5, hjust = 0) +
+  geom_text(aes(label = glue::glue("50th percentile \n(i.e. ~{round(q50)} days)")), 
+            x = q50 + 5, y = 15, size = 2.5, hjust = 0) +
+  scale_x_continuous(n.breaks = 10) +
+  labs(x = 'Absolute difference in treatment duration \n(|CalMAPPER - VIIRS|)',
+       y = '# of treatments')
+
+cowplot::plot_grid(p1, p2, rows = 1, scale = .85) +
+  cowplot::draw_text('Avg julian day for burns: CalMAPPER vs. VIIRS', y = .95)
+```
+
+Visualize: 2) how many polygons are without any VIIRS detections. 60%!
+
+```{r}
+nodetects <- mean(is.na(CM_vs_viirs_7d$viirs_days))
+nodetects
+```
+
+Visualize: What about the polygons with no detections--what's the distribution of detections within treatment? Are there any patterns associated with these polygons--Could size of treatment matter? Burn type? 
+
+```{r}
+# add a column for VIIRS detections
+CM_7days2 <- CM_7days %>% 
+  left_join(select(CM_vs_viirs_7d, TREATMENT_ID, n_viirs)) %>% 
+  mutate(VIIRS_detects = !is.na(n_viirs),
+         n_viirs = replace_na(n_viirs, 0), .after = n_viirs)
+
+# look at number of detections within trts?
+ggplot(CM_7days2, aes(n_viirs)) +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9, binwidth = 1)
+
+# prep data
+CM_size_burntype <- CM_7days2 %>% 
+  as_tibble() %>% 
+  group_by(TREATMENT_ID) %>%
+  mutate(any_broadcast_burn = any(broadcast_burn == T)) %>%
+  distinct(TREATMENT_ID, trt_acres, VIIRS_detects, any_broadcast_burn) %>% 
+  ungroup
+```
+
+Look at burn type's influence on detections--slightly more in treatments with broadcast burns than pile burns
+```{r}
+# look at burn type vs prob of detection
+count(CM_size_burntype, any_broadcast_burn, VIIRS_detects) %>% 
+  ggplot(aes(any_broadcast_burn, n, group = VIIRS_detects)) +
+  geom_col(aes(fill = VIIRS_detects), 
+           position = position_dodge2())
+
+# slightly more detections with broadcast burns than pile burns
+CM_size_burntype %>% 
+  group_by(any_broadcast_burn) %>% 
+  summarise(perc_detections = mean(VIIRS_detects))
+```
+
+Ok, well is that bc broadcast burns might be over a larger area than pile burns? Not necessarily. If anything, the importance of treatment size seems less for broadcast burns. This figure nonetheless shows that VIIRS generally wont do a good job of detecting activity until >1000 acres. Meanwhile, the median treatment is 97 acres. 
+
+```{r}
+# look at size of treatment on probability of any VIIRS detections. 
+ggplot(CM_size_burntype, aes(as.numeric(trt_acres), as.numeric(VIIRS_detects), 
+                             group = any_broadcast_burn, color = any_broadcast_burn)) +
+  geom_jitter(width = 0, height = .02, alpha = .3) +
+  geom_smooth(method="glm", method.args = list(family = "binomial")) +
+  labs(x = 'Treatment size (acres)', y = "Probability of any VIIRS detects") +
+  scale_x_continuous(n.breaks = 10)
+  #scale_x_log10(n.breaks = 10)
+
+# whats the typical size of treatments? 
+median(CM_size_burntype$trt_acres)
+ggplot(CM_size_burntype, aes(as.numeric(trt_acres))) + geom_density(fill = 'grey90') +
+  scale_x_continuous(n.breaks = 10)
+
+
+```
+
