@@ -17,19 +17,16 @@ require(VennDiagram)
 ```{r}
 load(file = "Rdata/frap_2020_dis_Rx.Rdata")
 load(file = "Rdata/CalMapper_activities_fire_2020.Rdata")
+load(file = "Rdata/frap_2020_Rx.Rdata")
 ```
 
-# Transform to match
-```{r}
-frap_20_diss <- st_transform(frap_diss_2020, st_crs(act_2020))
-```
 
 # Visualize
 ```{r}
 #mapview(list(frap_20_diss, act_2020, overlaps), col.regions=list("red","blue", "green"),col=list("red","blue", "green"))
 ```
 
-# It's too impossible to actually find overlaps of activity acres so I'm going to stick with dissolving them and finding footprint acreage overlap
+It's too impossible to actually find overlaps of activity acres so I'm going to stick with dissolving them and finding footprint acreage overlap
 
 ## Dissolve 
 ```{r}
@@ -37,9 +34,15 @@ act_20_diss <- act_2020 %>%
   st_union()
 ```
 
+# Transform to match
+```{r}
+act_20_diss <- st_transform(act_20_diss, st_crs(frap_20))
+```
+
+
 ## Overlap
 ```{r}
-overlap <- st_intersection(frap_20_diss, act_20_diss)
+overlap <- st_intersection(frap_diss_2020, act_20_diss)
 overlap_ha <- as.numeric(st_area(overlap)/10000) %>% 
   round()
 overlap_ha
@@ -47,7 +50,7 @@ overlap_ha
 
 ## Find areas of each
 ```{r}
-frap_20_ha <- as.numeric(st_area(frap_20_diss)/10000) %>% 
+frap_20_ha <- as.numeric(st_area(frap_diss_2020)/10000) %>% 
   round()
 calmapper_20_ha <- as.numeric(st_area(act_20_diss)/10000) %>% 
   round()
@@ -57,6 +60,19 @@ calmapper_20_ha <- as.numeric(st_area(act_20_diss)/10000) %>%
 paste("total area of FRAP dissolved polygons is", frap_20_ha, "ha")
 paste("total area of CAL MAPPER dissolved polygons is", calmapper_20_ha, "ha")
 ```
+
+# Plot with National Forests to make sure it looks right
+```{r}
+load(file = "Rdata/NF.Rdata")
+```
+
+```{r}
+mapview::mapview(list(act_20_diss, NF, frap_diss_2020),
+                 col.regions=list("red","blue", "green"),
+                 col=list("red","blue", "green"),
+                 alpha.regions = 0.6)
+```
+
 
 # Function to make Venn diagram
 ```{r}
@@ -69,6 +85,7 @@ venn_calmap <- function(){
                    fill = c("red", "green"),
                    cex = 1)
 }
+venn_calmap()
 ```
 
 ```{r}
@@ -76,5 +93,14 @@ file <- "Venn_FRAP_CalMAPPER.jpeg"
 grid.newpage()
 png(file = file, width = 1000, height = 1000)
 venn_calmap()
+dev.off()
 ```
 
+# Examine treatments in FRAP that don't overlap
+```{r}
+frap_only <- st_difference(frap_20, act_20_diss)
+```
+
+```{r}
+#mapview::mapview(list(frap_20, act_20_diss), col.regions=list("red","blue"),col=list("red","blue"))
+```

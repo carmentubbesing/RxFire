@@ -60,8 +60,20 @@ frap <- frap %>%
 summary(as.factor(frap$treatment_type))
 ```
 
-# Save for statewide analysis
+# Mask out federal lands
+```{r}
+load(file = "Rdata/NF.Rdata")
+```
 
+```{r}
+NF <- st_transform(NF, st_crs(frap))
+```
+
+```{r}
+act_2020 <- st_difference(frap, NF)
+```
+
+# Save for statewide analysis
 ```{r}
 file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata", sep = "")
 save(frap, file = file)
@@ -72,23 +84,23 @@ save(frap, file = file)
 table <- data.frame("year" = numeric(), "area" = numeric())
 for(i in unique(frap$YEAR_)){
   print(paste("for year", i))
-  frap_i <- frap %>% 
+  frap_i <- frap %>%
     filter(YEAR_ == i)
   print(paste("there are ", nrow(frap_i), " fires"))
-  
+
   # Dissolve polygons
-  frap_i_diss <- frap_i %>% 
-    st_union() %>% 
+  frap_i_diss <- frap_i %>%
+    st_union() %>%
     st_sf()
   name <- paste("frap_diss_", i, sep = "")
   assign(name, frap_i_diss)
-  
+
   # Calculate area
   area_i = st_area(frap_i_diss)
   name_area = paste("area_", i, sep = "")
   assign(name_area, area_i)
   print(paste("and ", area_i, " acres"))
-  
+
   # Add to table
   table_i <- data.frame(i, area_i)
   table <- rbind(table, table_i)
@@ -97,16 +109,22 @@ for(i in unique(frap$YEAR_)){
 ```
 
 ```{r}
+save(table, file = "Rdata/frap_2017-2022_areas_diss.Rdata")
+```
+
+```{r}
 frap_20 <- frap %>% 
   filter(YEAR_ == 2020)
 ```
 
-```{r}
-save(table, file = "Rdata/frap_2017-2022_areas_diss.Rdata")
-```
 
+```{r}
+frap_20 <- st_sym_difference(frap_20, NF)
+```
 
 ```{r}
 save(frap_diss_2020, file = "Rdata/frap_2020_dis_Rx.Rdata")
 save(frap_20, file = "Rdata/frap_2020_Rx.Rdata")
 ```
+
+# 

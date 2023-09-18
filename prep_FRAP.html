@@ -405,6 +405,13 @@ if(length(frap_dir) &gt; 1){
 </div>
 </div>
 </div>
+<div id="mask-out-federal-lands" class="section level1">
+<h1>Mask out federal lands</h1>
+<pre class="r"><code>load(paste(ref_path, &quot;/National Forest Boundaries/NF_CA.Rdata&quot;, sep = &quot;&quot;))
+NF &lt;- st_transform(NF, st_crs(frap))
+NF &lt;- NF %&gt;% st_union 
+NF &lt;- NF %&gt;% st_simplify(dTolerance = 100)</code></pre>
+</div>
 <div id="save-for-statewide-analysis" class="section level1">
 <h1>Save for statewide analysis</h1>
 <pre class="r"><code>file &lt;- paste(ref_path, &quot;/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata&quot;, sep = &quot;&quot;)
@@ -415,23 +422,23 @@ save(frap, file = file)</code></pre>
 <pre class="r"><code>table &lt;- data.frame(&quot;year&quot; = numeric(), &quot;area&quot; = numeric())
 for(i in unique(frap$YEAR_)){
   print(paste(&quot;for year&quot;, i))
-  frap_i &lt;- frap %&gt;% 
+  frap_i &lt;- frap %&gt;%
     filter(YEAR_ == i)
   print(paste(&quot;there are &quot;, nrow(frap_i), &quot; fires&quot;))
-  
+
   # Dissolve polygons
-  frap_i_diss &lt;- frap_i %&gt;% 
-    st_union() %&gt;% 
+  frap_i_diss &lt;- frap_i %&gt;%
+    st_union() %&gt;%
     st_sf()
   name &lt;- paste(&quot;frap_diss_&quot;, i, sep = &quot;&quot;)
   assign(name, frap_i_diss)
-  
+
   # Calculate area
   area_i = st_area(frap_i_diss)
   name_area = paste(&quot;area_&quot;, i, sep = &quot;&quot;)
   assign(name_area, area_i)
   print(paste(&quot;and &quot;, area_i, &quot; acres&quot;))
-  
+
   # Add to table
   table_i &lt;- data.frame(i, area_i)
   table &lt;- rbind(table, table_i)
@@ -461,11 +468,17 @@ for(i in unique(frap$YEAR_)){
 ## [1] &quot;there are  605  fires&quot;
 ## [1] &quot;and  399344234.62627  acres&quot;
 ## [1] &quot;&quot;</code></pre>
+<pre class="r"><code>save(table, file = &quot;Rdata/frap_2017-2022_areas_diss.Rdata&quot;)</code></pre>
 <pre class="r"><code>frap_20 &lt;- frap %&gt;% 
   filter(YEAR_ == 2020)</code></pre>
-<pre class="r"><code>save(table, file = &quot;Rdata/frap_2017-2022_areas_diss.Rdata&quot;)</code></pre>
+<pre class="r"><code>frap_20 &lt;- st_sym_difference(frap_20, NF)</code></pre>
+<pre><code>## Warning: attribute variables are assumed to be spatially constant throughout
+## all geometries</code></pre>
 <pre class="r"><code>save(frap_diss_2020, file = &quot;Rdata/frap_2020_dis_Rx.Rdata&quot;)
 save(frap_20, file = &quot;Rdata/frap_2020_Rx.Rdata&quot;)</code></pre>
+</div>
+<div id="section" class="section level1">
+<h1></h1>
 </div>
 
 

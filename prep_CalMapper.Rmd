@@ -172,7 +172,7 @@ It's safe to use the Activities information and not the Treatment information.
 
 # Write activities data to gdb
 ```{r}
-st_write(act_sf_fire, dsn = calmapper_gdb, layer = "CalMapper_fire_act")
+st_write(act_sf_fire, dsn = calmapper_gdb, layer = "CalMapper_fire_act", delete_layer = T)
 ```
 
 
@@ -184,17 +184,27 @@ act_sf_fire %>%
   select(PROJECT_ID, TREATMENT_ID, ACTIVITY_ID, AQ_ID, PROJECT_NAME, TREATMENT_NAME, ACTIVITY_NAME, ACTIVITY_DESCRIPTION, )
 ```
 
-
-
-
 # Save 2020 to use for Venn Diagram
 ```{r}
 act_2020 <- act_sf_fire %>% 
   filter(YEAR == 2020)
 ```
 
+# Mask out federal lands
+```{r}
+dsn = paste(ref_path, "/National Forest Boundaries", sep = "")
+NF <- st_read(dsn = dsn, "NF_CA_diss")
+NF <- st_transform(NF, st_crs(act_2020))
+save(NF,  file = "Rdata/NF.Rdata")
+```
+
+```{r}
+act_2020 <- st_difference(act_2020, NF)
+```
+
 # Save
 ```{r}
+st_write(act_2020, dsn = "shapefiles", layer = "CalMapper_activities_fire_2020", driver = "ESRI Shapefile", delete_layer = T)
 save(act_2020, file = "Rdata/CalMapper_activities_fire_2020.Rdata")
 ```
 

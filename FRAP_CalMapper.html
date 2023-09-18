@@ -402,7 +402,7 @@ overlap</h1>
 overlap_ha &lt;- as.numeric(st_area(overlap)/10000) %&gt;% 
   round()
 overlap_ha</code></pre>
-<pre><code>## [1] 12017</code></pre>
+<pre><code>## [1] 10273</code></pre>
 </div>
 <div id="find-areas-of-each" class="section level2">
 <h2>Find areas of each</h2>
@@ -411,7 +411,7 @@ overlap_ha</code></pre>
 calmapper_20_ha &lt;- as.numeric(st_area(act_20_diss)/10000) %&gt;% 
   round()</code></pre>
 <pre class="r"><code>paste(&quot;total area of FRAP dissolved polygons is&quot;, frap_20_ha, &quot;ha&quot;)</code></pre>
-<pre><code>## [1] &quot;total area of FRAP dissolved polygons is 49306 ha&quot;</code></pre>
+<pre><code>## [1] &quot;total area of FRAP dissolved polygons is 19838 ha&quot;</code></pre>
 <pre class="r"><code>paste(&quot;total area of CAL MAPPER dissolved polygons is&quot;, calmapper_20_ha, &quot;ha&quot;)</code></pre>
 <pre><code>## [1] &quot;total area of CAL MAPPER dissolved polygons is 41003 ha&quot;</code></pre>
 </div>
@@ -429,7 +429,7 @@ calmapper_20_ha &lt;- as.numeric(st_area(act_20_diss)/10000) %&gt;%
 }</code></pre>
 <pre class="r"><code>file &lt;- &quot;Venn_FRAP_CalMAPPER.jpeg&quot;
 grid.newpage()
-png(file = file, width = 500, height = 500)
+png(file = file, width = 1000, height = 1000)
 venn_calmap()</code></pre>
 <pre><code>## (polygon[GRID.polygon.11], polygon[GRID.polygon.12], polygon[GRID.polygon.13], polygon[GRID.polygon.14], text[GRID.text.15], text[GRID.text.16], text[GRID.text.17], text[GRID.text.18], text[GRID.text.19])</code></pre>
 </div>
