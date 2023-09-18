@@ -8,7 +8,7 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
 library(tidyverse)
 library(sf)
 library(fs)
@@ -215,7 +215,9 @@ mapview::mapview(viirs_overlap, cex = 3, zcol = 'TREATMENT_ID', legend = F) +
 
 *How well did the number of days for which thermal anomalies were detected corroborate with the number of days that burners indicated in their project reporting?*
 
-For every treatment polygon, calculate the total duration of burning activity and number of unique days for intersecting VIIRS detections. Compare the two calculations. I also want to look at timing.
+For every treatment polygon, calculate the total duration of burning activity and number of unique days for intersecting VIIRS detections. Compare the two calculations. 
+
+I also want to take a quick look at timing. For each treatment polygon, I calculated the mean julian day of both the VIIRS and CalMAPPER dates and compared the two. Gives you a general idea of temporal mismatch. For a more careful analysis, I might estimate the probability of a VIIRS detection in the treatment within 2 days of the activity. But can do that at a later point. 
 
 ```{r}
 
@@ -269,9 +271,13 @@ cowplot::plot_grid(p1, p2, rows = 1, scale = .85) +
   cowplot::draw_text('Number of burning days: CalMAPPER vs. VIIRS', y = .95)
 ```
 
-Duration might look ok, but what about timing? Not great!
+Duration might look ok, but what about timing? Not great! And these are the treatments with detections too--plenty without any VIIRS points showing up.
 
 ```{r}
+
+# proportion of treatments with a difference of 2 days or less
+mean(CM_vs_viirs_7d$jdays_diff_abs <= 2, na.rm = T)
+
 # differences in mean day of the year
 p1 <- ggplot(CM_vs_viirs_7d, aes(jdays_diff)) +
   geom_rect(aes(xmin = -Inf, xmax = 0, ymin = -Inf, ymax = Inf), fill = "lightcyan2") +
@@ -300,7 +306,7 @@ cowplot::plot_grid(p1, p2, rows = 1, scale = .85) +
   cowplot::draw_text('Avg julian day for burns: CalMAPPER vs. VIIRS', y = .95)
 ```
 
-Visualize: 2) how many polygons are without any VIIRS detections. 60%!
+Visualize: 2) how many polygons are without any VIIRS detections. 60%! 
 
 ```{r}
 nodetects <- mean(is.na(CM_vs_viirs_7d$viirs_days))
@@ -317,7 +323,10 @@ CM_7days2 <- CM_7days %>%
          n_viirs = replace_na(n_viirs, 0), .after = n_viirs)
 
 # look at number of detections within trts?
-ggplot(CM_7days2, aes(n_viirs)) +
+CM_7days2 %>% 
+  as_tibble %>% 
+  distinct(TREATMENT_ID, .keep_all = T) %>% 
+  ggplot(aes(n_viirs)) +
   geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9, binwidth = 1)
 
 # prep data
@@ -329,13 +338,15 @@ CM_size_burntype <- CM_7days2 %>%
   ungroup
 ```
 
-Look at burn type's influence on detections--slightly more in treatments with broadcast burns than pile burns
+Look at burn type's influence on detections--slightly more in treatments with broadcast burns than pile burns. But the majority of either treatment are not associated with VIIRS detections. 
 ```{r}
 # look at burn type vs prob of detection
 count(CM_size_burntype, any_broadcast_burn, VIIRS_detects) %>% 
   ggplot(aes(any_broadcast_burn, n, group = VIIRS_detects)) +
   geom_col(aes(fill = VIIRS_detects), 
-           position = position_dodge2())
+           position = position_dodge2()) +
+  labs(x = 'Treatment contains broadcast burn', 
+      fill = "VIIRS detections")
 
 # slightly more detections with broadcast burns than pile burns
 CM_size_burntype %>% 
@@ -343,17 +354,22 @@ CM_size_burntype %>%
   summarise(perc_detections = mean(VIIRS_detects))
 ```
 
-Ok, well is that bc broadcast burns might be over a larger area than pile burns? Not necessarily. If anything, the importance of treatment size seems less for broadcast burns. This figure nonetheless shows that VIIRS generally wont do a good job of detecting activity until >1000 acres. Meanwhile, the median treatment is 97 acres. 
+Ok, well is that bc broadcast burns might be over a larger area than pile burns? Not necessarily. If anything, the importance of treatment size seems less for broadcast burns. This figure nonetheless shows that VIIRS generally wont do a good job of detecting activity until >1000 acres, much greater than the thresholds of 25 and 50 acres for burn piles and broadcast burns (dashed vertical lines), respectively. Meanwhile, the median treatment is 97 acres. 
 
 ```{r}
 # look at size of treatment on probability of any VIIRS detections. 
 ggplot(CM_size_burntype, aes(as.numeric(trt_acres), as.numeric(VIIRS_detects), 
                              group = any_broadcast_burn, color = any_broadcast_burn)) +
   geom_jitter(width = 0, height = .02, alpha = .3) +
+  geom_vline(data = data.frame(any_broadcast_burn = c(T, F), 
+                               x = c(50, 25)), 
+             aes(xintercept = x, color = any_broadcast_burn), lwd = 1, lty = 2) +
   geom_smooth(method="glm", method.args = list(family = "binomial")) +
-  labs(x = 'Treatment size (acres)', y = "Probability of any VIIRS detects") +
-  scale_x_continuous(n.breaks = 10)
-  #scale_x_log10(n.breaks = 10)
+  labs(x = 'Treatment size (acres)', y = "Probability of any VIIRS detects",
+       title = 'VIIRS detections vs size', 
+       subtitle = "*EPA's reporting thresholds shown by vertical lines") +
+  #scale_x_continuous(n.breaks = 10)
+  scale_x_log10(n.breaks = 10)
 
 # whats the typical size of treatments? 
 median(CM_size_burntype$trt_acres)
