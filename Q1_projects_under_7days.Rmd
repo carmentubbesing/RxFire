@@ -377,10 +377,12 @@ CM_size_burntype %>%
        title = 'VIIRS detections vs. size', 
        subtitle = "*EPA's reporting thresholds shown by vertical lines", 
        color = 'Burn type') +
-  #scale_x_continuous(n.breaks = 10)
+  #scale_x_continuous(n.breaks = 10) +
   scale_x_log10(n.breaks = 10) +
-   scale_color_brewer(palette = 'Set1', direction = -1) +
+  scale_y_continuous(n.breaks = 10) +
+  scale_color_brewer(palette = 'Set1', direction = -1) +
   theme(legend.position = 'bottom')
+
 
 # whats the typical size of treatments? 
 median(CM_size_burntype$trt_acres)
@@ -388,5 +390,24 @@ ggplot(CM_size_burntype, aes(as.numeric(trt_acres))) + geom_density(fill = 'grey
   scale_x_continuous(n.breaks = 10)
 
 
+# run the actual binomial model so you can look up values on the y axis
+dat <- CM_size_burntype %>% 
+  mutate(burntype = ifelse(any_broadcast_burn == T, 'Broadcast burn', 'Pile burn')) 
+
+m1 <- glm(data = dat, formula = VIIRS_detects ~ log(trt_acres) * any_broadcast_burn, 
+          family = 'binomial')
+summary(m1)
+predict(m1, 
+        newdata = data.frame(trt_acres = c(25, 50), any_broadcast_burn = c(F, T)),
+        type = 'response')
+
+
+
+m2 <- glm(data = dat, formula = VIIRS_detects ~ (trt_acres) * any_broadcast_burn, 
+          family = 'binomial')
+summary(m2)
+predict(m2, 
+        newdata = data.frame(trt_acres = c(25, 50), any_broadcast_burn = c(F, T)),
+        type = 'response')
 ```
 

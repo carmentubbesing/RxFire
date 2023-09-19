@@ -121,15 +121,14 @@ ggplot(matches_activitylevel,
        y = "% activity days with VIIRS detections") +
   scale_y_continuous(limits = c(0, 100))
 
-# # same thing as above but x-axis is activity size
-# matches_activitylevel %>% 
-#   filter(n_matching_dates > 0 ) %>% 
-#   ggplot(aes(trt_acres, 100 * n_matching_dates/as.numeric(duration))) + 
-#   geom_point() + 
-#   labs(x = 'Polygon size (acres)', 
-#        y = "% activity days with VIIRS detections") +
-#   scale_y_continuous(limits = c(0, 100)) +
-#   facet_grid(~ duration <= 7)
+# same thing as above but x-axis is activity size
+matches_activitylevel %>%
+  filter(n_matching_dates > 0 ) %>%
+  ggplot(aes(trt_acres, 100 * n_matching_dates/as.numeric(duration))) +
+  geom_point() +
+  labs(x = 'Polygon size (acres)',
+       y = "% activity days with VIIRS detections") +
+  scale_y_continuous(limits = c(0, 100)) #+ facet_grid(~ duration <= 7)
 
 # # probability of any VIIRS detections vs. duration
 # ggplot(matches_activitylevel, aes(duration, as.numeric(n_matching_dates != 0))) +
