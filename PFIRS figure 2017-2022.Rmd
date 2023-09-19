@@ -1,0 +1,90 @@
+---
+title: "PFIRS figure 2017-2022"
+output: html_document
+date: "2023-09-12"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+```
+
+# Load data
+
+## PFIRS
+```{r}
+load("Rdata/PFIRS_2017-2022_pulled2023_noNF.Rdata")
+```
+
+## FRAP
+```{r}
+load("Rdata/frap_acres_yr.Rdata")
+```
+
+### CalMapper
+```{r}
+load("Rdata/CalMapper_activities_fire.Rdata")
+```
+
+# Format PFIRS
+```{r}
+PFIRS_acres <- sf_new_noNF %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(acres = sum(Acres_Burned)) %>% 
+  filter(Year %in% seq(2017, 2022)) %>% 
+  mutate(source = "PFIRS")
+PFIRS_acres
+```
+
+# Format FRAP
+```{r}
+FRAP_acres <- frap_ac_year %>% 
+  rename(Year = YEAR_) %>% 
+  mutate(acres = as.numeric(acres)) %>% 
+  mutate(source = "FRAP") %>% 
+  mutate(Year = as.numeric(Year))
+FRAP_acres
+```
+
+# Join PFIRS and FRAP
+```{r}
+areas <- full_join(FRAP_acres, PFIRS_acres)
+areas
+```
+
+# Format CalMapper
+
+```{r}
+calmapper_acres <- act_sf_fire %>% 
+  st_drop_geometry() %>% 
+  group_by(YEAR) %>% 
+  summarize(acres = sum(TREATED_ACRES)) %>% 
+  mutate(source = "CalMapper") %>% 
+  rename(Year = YEAR) %>% 
+  filter(Year != 2023)
+calmapper_acres
+```
+
+# Add CalMapper to table
+```{r}
+areas <- full_join(areas, calmapper_acres)
+areas
+```
+
+
+# Plot
+```{r}
+ggplot(areas)+
+  geom_col(aes(x = Year, y = acres, fill = source), position = "dodge")+
+  scale_x_continuous(breaks = seq(2017,2022))+
+  scale_fill_manual(values = c("#00ba38", "#ee936b", "#619cff"))+
+  theme_minimal()+
+  xlab("")
+```
+
+```{r}
+ggsave("figures/PFIRS_FRAP_CalMapper_2017-2022.png", width = 5, height = 3)
+```
+
+

@@ -70,14 +70,22 @@ NF <- st_transform(NF, st_crs(frap))
 ```
 
 ```{r}
-act_2020 <- st_difference(frap, NF)
+frap <- st_difference(frap, NF)
 ```
 
 # Save for statewide analysis
 ```{r}
-file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata", sep = "")
+file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022_noNF.Rdata", sep = "")
 save(frap, file = file)
 ```
+
+
+```{r}
+frap_20 <- frap %>% 
+  filter(YEAR_ == 2020)
+save(frap_20, file = "Rdata/frap_2020_Rx.Rdata")
+```
+
 
 # Dissolve by year
 ```{r}
@@ -113,18 +121,23 @@ save(table, file = "Rdata/frap_2017-2022_areas_diss.Rdata")
 ```
 
 ```{r}
-frap_20 <- frap %>% 
-  filter(YEAR_ == 2020)
-```
-
-
-```{r}
-frap_20 <- st_sym_difference(frap_20, NF)
-```
-
-```{r}
 save(frap_diss_2020, file = "Rdata/frap_2020_dis_Rx.Rdata")
-save(frap_20, file = "Rdata/frap_2020_Rx.Rdata")
 ```
 
-# 
+# Calculate acreage by year
+```{r}
+names(frap)
+```
+
+```{r}
+frap_ac_year <- frap %>% 
+  st_drop_geometry() %>% 
+  group_by(YEAR_) %>% 
+  summarize(acres = sum(TREATED_AC))
+frap_ac_year
+```
+
+```{r}
+save(frap_ac_year, file = "Rdata/frap_acres_yr.Rdata")
+```
+

@@ -1,0 +1,219 @@
+---
+title: "prep_PFIRS"
+output: html_document
+date: "2023-09-05"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+require(readxl)
+require(mapview)
+```
+
+# 2019 Data pulled in 2022
+```{r}
+file <- paste0(ref_path, "/PFIRS/PFIRS 2019-2020 CT pulled 2022.xlsx")
+xy_old <- read_excel(file)
+```
+
+```{r}
+xy_old %>% head()
+```
+
+## Fix column names
+```{r}
+xy_old <- xy_old %>% 
+  rename(Burn_Date = `Burn Date`) %>% 
+  rename(Burn_Unit = `Burn Unit`) %>% 
+  rename(Acres_Burned = `Acres Burned`) %>% 
+  rename(Fuel_Type = `Fuel Type`) %>% 
+  rename(Total_Tons = `Total Tons`) %>% 
+  rename(Burn_Type = `Burn Type`) 
+```
+
+## Make lat and long numeric and remove unk rows
+```{r}
+xy_old <- xy_old %>% 
+  filter(!Longitude == "UNK") %>% 
+  mutate(Longitude = as.numeric(Longitude)) %>% 
+  mutate(Latitude = as.numeric(Latitude))
+```
+
+
+## Fix dates that should be negative
+```{r}
+xy_old <- xy_old %>% 
+  mutate(Longitude = ifelse(Longitude > 0, Longitude*(-1), Longitude))
+```
+
+## Add year column
+```{r}
+xy_old <- xy_old %>% 
+  mutate(Year = year(Burn_Date))
+```
+
+
+
+## Filter to 2019
+```{r}
+xy_old_2019 <- xy_old %>% 
+  filter(Year == 2019)
+```
+
+```{r}
+xy_old_2019 %>% head()
+```
+
+
+# Delete duplicates
+
+From Jason Branz: "Typically if there are multiple records with the same date, burn name, and acres, it’s a duplicate." 
+
+## Look at duplicates
+```{r}
+xy_old_2019 %>% 
+  select(Burn_Date, Burn_Unit, Acres_Burned) %>% 
+  filter(duplicated(.))
+```
+
+## Remove duplicates
+```{r}
+xy_old_2019 <- xy_old_2019 %>% 
+  distinct(Burn_Date, Burn_Unit, Acres_Burned, .keep_all = T)
+```
+
+
+
+## Make spatial
+```{r}
+sf_old_2019 <- st_as_sf(xy_old_2019, coords = c("Longitude", "Latitude"), crs = 4326)
+```
+
+
+## Export to shapefile
+```{r}
+st_write(sf_old_2019, dsn = "shapefiles", layer = "PFIRS_2019_pulled2022", driver = "ESRI Shapefile", delete_layer = T)
+```
+
+# 2019 Data pulled in 2023
+```{r}
+xy_new <- read_excel(paste0(ref_path, "/PFIRS/PFIRS 2017-2022 pulled 2023.xlsx"))
+```
+
+```{r}
+xy_new
+```
+
+## Fix column names
+```{r}
+xy_new <- xy_new %>% 
+  rename(Burn_Date = `Burn Date`) %>% 
+  rename(Burn_Unit = `Burn Unit`) %>% 
+  rename(Acres_Burned = `Acres Burned`) %>% 
+  rename(Fuel_Type = `Fuel Type`) %>% 
+  rename(Total_Tons = `Total Tons`) %>% 
+  rename(Burn_Type = `Burn Type`) 
+```
+
+
+## Fix dates that should be negative
+```{r}
+xy_new <- xy_new %>% 
+  mutate(Longitude = ifelse(Longitude > 0, Longitude*(-1), Longitude))
+```
+
+## Add year column
+```{r}
+xy_new <- xy_new %>% 
+  mutate(Year = year(Burn_Date))
+```
+
+
+## Remove duplicates
+```{r}
+xy_new <- xy_new %>% 
+  distinct(Burn_Date, Burn_Unit, Acres_Burned, .keep_all = T)
+```
+
+## Make spatial and save
+
+### 2019
+
+#### Filter to 2019
+```{r}
+xy_new_2019 <- xy_new %>% 
+  filter(Year == 2019)
+```
+
+
+```{r}
+xy_new_2019 %>% head()
+```
+
+#### Make spatial
+```{r}
+sf_new_2019 <- st_as_sf(xy_new_2019, coords = c("Longitude", "Latitude"), crs = 4326)
+```
+
+#### Export to shapefile
+```{r, warning=F}
+st_write(sf_new_2019, "shapefiles", "PFIRS_2019_pulled2023", driver = "ESRI Shapefile", delete_layer = T)
+```
+
+### All years
+
+#### Make spatial
+```{r}
+sf_new <- st_as_sf(xy_new, coords = c("Longitude", "Latitude"), crs = 4326)
+```
+
+#### Export to shapefile
+```{r, warning=F}
+st_write(sf_new, "shapefiles", "PFIRS_2017-2022_pulled2023", driver = "ESRI Shapefile", delete_layer = T)
+```
+
+#### Save as Rdata
+```{r}
+save(sf_new, file = "PFIRS_2017-2022_pulled2023.Rdata")
+```
+
+# Mask out federal lands
+
+## Crop to state of CA
+```{r}
+CA <- st_read(dsn = paste0(ref_path, "/CA boundary/ca-state-boundary/", layer = "CA_State_TIGER2016.shp"))
+CA <- st_transform(CA, st_crs(sf_new))
+```
+
+```{r}
+sf_new <- st_intersection(sf_new, CA)
+```
+
+
+```{r}
+load(file = "Rdata/NF.Rdata")
+```
+
+```{r}
+NF <- st_transform(NF, st_crs(sf_new))
+```
+
+```{r}
+sf_use_s2(FALSE)
+```
+
+```{r}
+sf_new_noNF <- st_difference(sf_new, NF)
+```
+
+```{r}
+mapview::mapview(list(NF, sf_new_noNF), col.regions=list("red","blue"),col=list("red","blue"))
+```
+
+#### Save as Rdata
+```{r}
+save(sf_new_noNF, file = "Rdata/PFIRS_2017-2022_pulled2023_noNF.Rdata")
+```
+
+

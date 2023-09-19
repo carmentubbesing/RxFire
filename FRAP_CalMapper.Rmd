@@ -18,12 +18,7 @@ require(VennDiagram)
 load(file = "Rdata/frap_2020_dis_Rx.Rdata")
 load(file = "Rdata/CalMapper_activities_fire_2020.Rdata")
 load(file = "Rdata/frap_2020_Rx.Rdata")
-```
-
-
-# Visualize
-```{r}
-#mapview(list(frap_20_diss, act_2020, overlaps), col.regions=list("red","blue", "green"),col=list("red","blue", "green"))
+load(file = "Rdata/NF.Rdata")
 ```
 
 It's too impossible to actually find overlaps of activity acres so I'm going to stick with dissolving them and finding footprint acreage overlap
@@ -63,14 +58,10 @@ paste("total area of CAL MAPPER dissolved polygons is", calmapper_20_ha, "ha")
 
 # Plot with National Forests to make sure it looks right
 ```{r}
-load(file = "Rdata/NF.Rdata")
-```
-
-```{r}
 mapview::mapview(list(act_20_diss, NF, frap_diss_2020),
                  col.regions=list("red","blue", "green"),
                  col=list("red","blue", "green"),
-                 alpha.regions = 0.6)
+                 alpha.regions = 0.4)
 ```
 
 
@@ -102,5 +93,90 @@ frap_only <- st_difference(frap_20, act_20_diss)
 ```
 
 ```{r}
-#mapview::mapview(list(frap_20, act_20_diss), col.regions=list("red","blue"),col=list("red","blue"))
+frap_only %>% head()
 ```
+
+```{r}
+mapview::mapview(list(frap_20, frap_only), col.regions=list("red","blue"),col=list("red","blue"))
+```
+
+```{r}
+frap_only <- frap_only %>% 
+  mutate(area_m2 = st_area(frap_only)) %>% 
+  arrange(desc(area_m2))
+```
+
+```{r}
+head(frap_only)
+```
+
+```{r}
+write.csv(frap_only %>% st_drop_geometry(), file = "FRAP_not_CalMapper.csv", row.names = F)
+```
+
+# Make a Venn diagram using treated_acres columns instead of GIS acreage
+
+frap_20 and act_2020
+
+```{r}
+frap_only_ID <- frap_20 %>% 
+  filter(!TREATMENT_ %in% act_2020$TREATMENT_ID)
+frap_only_ID %>% summarize(sum(TREATED_AC))
+```
+
+```{r}
+overlap_id_ac <- frap_20 %>% 
+  st_drop_geometry() %>% 
+  filter(TREATMENT_ %in% act_2020$TREATMENT_ID) %>% 
+  summarize(sum(TREATED_AC))
+overlap_id_ac
+```
+
+
+```{r}
+overlap_id_ac <- act_2020 %>% 
+  st_drop_geometry() %>% 
+  filter(TREATMENT_ID %in% frap_20$TREATMENT_) %>% 
+  summarize(sum(TREATED_ACRES))
+overlap_id_ac
+```
+
+
+```{r}
+frap_id_ac <- frap_20 %>% 
+  st_drop_geometry() %>% 
+  summarize(sum(TREATED_AC))
+frap_id_ac
+```
+
+```{r}
+calmapper_id_ac <- act_2020 %>% 
+  st_drop_geometry() %>% 
+  summarize(sum(TREATED_ACRES))
+calmapper_id_ac
+```
+
+```{r}
+venn_calmap_IDs <- function(){
+  grid.newpage()
+  draw.pairwise.venn(area2 = frap_id_ac,
+                   area1 = calmapper_id_ac,
+                   cross.area = overlap_id_ac,
+                   #category = c("", ""),
+                   fill = c( "green", "red"),
+                   cex = 0,
+                   ext.text = T,
+                   euler.d = T,
+                   scaled = T)
+}
+venn_calmap_IDs()
+```
+
+```{r}
+file <- "Venn_FRAP_CalMAPPER_IDs.jpeg"
+grid.newpage()
+png(file = file, width = 1000, height = 1000)
+venn_calmap_IDs()
+dev.off()
+```
+

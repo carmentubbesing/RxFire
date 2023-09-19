@@ -398,24 +398,25 @@ if(length(frap_dir) &gt; 1){
     TRUE ~ &quot;NA&quot;
   ))</code></pre>
 <pre class="r"><code>summary(as.factor(frap$treatment_type))</code></pre>
-<pre><code>##    Broadcast Burn          Fire Use    Hand Pile Burn      Jackpot Burn 
-##              1226               312                41                19 
-## Machine Pile Burn                NA 
-##              2068                59</code></pre>
+<pre><code>##    Broadcast Burn          Fire Use    Hand Pile Burn      Jackpot Burn Machine Pile Burn                NA 
+##              1226               312                41                19              2068                59</code></pre>
 </div>
 </div>
 </div>
 <div id="mask-out-federal-lands" class="section level1">
 <h1>Mask out federal lands</h1>
-<pre class="r"><code>load(paste(ref_path, &quot;/National Forest Boundaries/NF_CA.Rdata&quot;, sep = &quot;&quot;))
-NF &lt;- st_transform(NF, st_crs(frap))
-NF &lt;- NF %&gt;% st_union 
-NF &lt;- NF %&gt;% st_simplify(dTolerance = 100)</code></pre>
+<pre class="r"><code>load(file = &quot;Rdata/NF.Rdata&quot;)</code></pre>
+<pre class="r"><code>NF &lt;- st_transform(NF, st_crs(frap))</code></pre>
+<pre class="r"><code>frap &lt;- st_difference(frap, NF)</code></pre>
+<pre><code>## Warning: attribute variables are assumed to be spatially constant throughout all geometries</code></pre>
 </div>
 <div id="save-for-statewide-analysis" class="section level1">
 <h1>Save for statewide analysis</h1>
-<pre class="r"><code>file &lt;- paste(ref_path, &quot;/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata&quot;, sep = &quot;&quot;)
+<pre class="r"><code>file &lt;- paste(ref_path, &quot;/FRAP fire perimeters/frap_Rx_fire_2017-2022_noNF.Rdata&quot;, sep = &quot;&quot;)
 save(frap, file = file)</code></pre>
+<pre class="r"><code>frap_20 &lt;- frap %&gt;% 
+  filter(YEAR_ == 2020)
+save(frap_20, file = &quot;Rdata/frap_2020_Rx.Rdata&quot;)</code></pre>
 </div>
 <div id="dissolve-by-year" class="section level1">
 <h1>Dissolve by year</h1>
@@ -445,37 +446,31 @@ for(i in unique(frap$YEAR_)){
   print(&quot;&quot;)
 }</code></pre>
 <pre><code>## [1] &quot;for year 2020&quot;
-## [1] &quot;there are  706  fires&quot;
-## [1] &quot;and  297270750.608154  acres&quot;
+## [1] &quot;there are  134  fires&quot;
+## [1] &quot;and  120999243.573785  acres&quot;
 ## [1] &quot;&quot;
 ## [1] &quot;for year 2017&quot;
-## [1] &quot;there are  242  fires&quot;
-## [1] &quot;and  150501902.087136  acres&quot;
+## [1] &quot;there are  133  fires&quot;
+## [1] &quot;and  90809048.7824837  acres&quot;
 ## [1] &quot;&quot;
 ## [1] &quot;for year 2018&quot;
-## [1] &quot;there are  446  fires&quot;
-## [1] &quot;and  286630806.923372  acres&quot;
+## [1] &quot;there are  91  fires&quot;
+## [1] &quot;and  71256003.0556452  acres&quot;
 ## [1] &quot;&quot;
 ## [1] &quot;for year 2019&quot;
-## [1] &quot;there are  1034  fires&quot;
-## [1] &quot;and  495954252.063527  acres&quot;
+## [1] &quot;there are  207  fires&quot;
+## [1] &quot;and  293011546.089997  acres&quot;
 ## [1] &quot;&quot;
 ## [1] &quot;for year 2021&quot;
-## [1] &quot;there are  692  fires&quot;
-## [1] &quot;and  305069504.054112  acres&quot;
+## [1] &quot;there are  157  fires&quot;
+## [1] &quot;and  163647595.868469  acres&quot;
 ## [1] &quot;&quot;
 ## [1] &quot;for year 2022&quot;
-## [1] &quot;there are  605  fires&quot;
-## [1] &quot;and  399344234.62627  acres&quot;
+## [1] &quot;there are  228  fires&quot;
+## [1] &quot;and  207161499.118382  acres&quot;
 ## [1] &quot;&quot;</code></pre>
 <pre class="r"><code>save(table, file = &quot;Rdata/frap_2017-2022_areas_diss.Rdata&quot;)</code></pre>
-<pre class="r"><code>frap_20 &lt;- frap %&gt;% 
-  filter(YEAR_ == 2020)</code></pre>
-<pre class="r"><code>frap_20 &lt;- st_sym_difference(frap_20, NF)</code></pre>
-<pre><code>## Warning: attribute variables are assumed to be spatially constant throughout
-## all geometries</code></pre>
-<pre class="r"><code>save(frap_diss_2020, file = &quot;Rdata/frap_2020_dis_Rx.Rdata&quot;)
-save(frap_20, file = &quot;Rdata/frap_2020_Rx.Rdata&quot;)</code></pre>
+<pre class="r"><code>save(frap_diss_2020, file = &quot;Rdata/frap_2020_dis_Rx.Rdata&quot;)</code></pre>
 </div>
 <div id="section" class="section level1">
 <h1></h1>

@@ -77,7 +77,7 @@ act_sf_fire <- act_sf_fire %>%
   mutate(DURATION = as.Date(ACTIVITY_END) - as.Date(ACTIVITY_START)+1)
 ```
 
-## YEAR
+## Add YEAR column
 ```{r}
 act_sf_fire <- act_sf_fire %>% 
   mutate(YEAR = year(ACTIVITY_END))
@@ -169,19 +169,9 @@ map
 
 It's safe to use the Activities information and not the Treatment information.
 
-
 # Write activities data to gdb
 ```{r}
 st_write(act_sf_fire, dsn = calmapper_gdb, layer = "CalMapper_fire_act", delete_layer = T)
-```
-
-
-# Remove duplicates from activities data
-```{r}
-act_sf_fire %>% 
-  filter(duplicated(SHAPE) & duplicated(YEAR) & duplicated(ACTIVITY_DESCRIPTION)) %>% 
-  arrange(SHAPE) %>% 
-  select(PROJECT_ID, TREATMENT_ID, ACTIVITY_ID, AQ_ID, PROJECT_NAME, TREATMENT_NAME, ACTIVITY_NAME, ACTIVITY_DESCRIPTION, )
 ```
 
 # Save 2020 to use for Venn Diagram
@@ -204,7 +194,6 @@ act_2020 <- st_difference(act_2020, NF)
 
 # Save
 ```{r}
-st_write(act_2020, dsn = "shapefiles", layer = "CalMapper_activities_fire_2020", driver = "ESRI Shapefile", delete_layer = T)
 save(act_2020, file = "Rdata/CalMapper_activities_fire_2020.Rdata")
 ```
 
