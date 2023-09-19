@@ -131,8 +131,9 @@ For a quick look, let's look at just one week...Aug1-15 2020.
 ```{r}
 
 viirs_filtered <- viirs_nonAg %>% 
-  filter(month(datetime) == 8, day(datetime) <= 15)
-mapview::mapview(viirs_filtered, zcol = 'jday', cex = 3)
+  filter(month(datetime) < 4)
+#mapview(CM_burn2020_buffered) +
+mapview::mapview(viirs_filtered, zcol = 'jday', cex = 3) 
 
 ```
 

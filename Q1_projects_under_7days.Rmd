@@ -106,6 +106,7 @@ ggplot(CM_burn, aes(ACTIVITY_END)) +
   geom_bar(),
 nrow = 2
 )
+CalMapper_dates
 ggsave(plot = CalMapper_dates, 
        filename = 'tmp_outputs/CalMAPPER_activity_dates.png', width = 6, height = 4)
   
@@ -181,7 +182,9 @@ CM_7days_trtIDs <- filter(CM_trtIDs_buffered, TREATMENT_ID %in% unique(CM_7days$
 
 
 # find those that intersect
-viirs_int <- st_intersection(viirs_t, CM_7days_trtIDs) %>% 
+viirs_int <- viirs_t %>% 
+  filter(CONFIDENCE != 'l') %>% 
+  st_intersection(CM_burn2020_buffered) %>% 
   mutate(rowname = rownames(.), 
          pointID = floor(as.numeric(rowname)),
          overlap_trts = grepl('\\.', rowname),
@@ -342,11 +345,16 @@ Look at burn type's influence on detections--slightly more in treatments with br
 ```{r}
 # look at burn type vs prob of detection
 count(CM_size_burntype, any_broadcast_burn, VIIRS_detects) %>% 
+  mutate(any_broadcast_burn = ifelse(any_broadcast_burn == T, 'Broadcast burn', "Pile Burn"), 
+         VIIRS_detects = ifelse(VIIRS_detects == T, 'Detected', "Not detected")) %>% 
   ggplot(aes(any_broadcast_burn, n, group = VIIRS_detects)) +
   geom_col(aes(fill = VIIRS_detects), 
            position = position_dodge2()) +
-  labs(x = 'Treatment contains broadcast burn', 
-      fill = "VIIRS detections")
+  labs(x = 'Treatment type', 
+      fill = "VIIRS", 
+      y = "# of treatment polygons") +
+  scale_fill_brewer(palette = 'Set1', direction = -1) +
+  theme(legend.position = 'bottom')
 
 # slightly more detections with broadcast burns than pile burns
 CM_size_burntype %>% 
@@ -358,18 +366,21 @@ Ok, well is that bc broadcast burns might be over a larger area than pile burns?
 
 ```{r}
 # look at size of treatment on probability of any VIIRS detections. 
-ggplot(CM_size_burntype, aes(as.numeric(trt_acres), as.numeric(VIIRS_detects), 
-                             group = any_broadcast_burn, color = any_broadcast_burn)) +
-  geom_jitter(width = 0, height = .02, alpha = .3) +
-  geom_vline(data = data.frame(any_broadcast_burn = c(T, F), 
-                               x = c(50, 25)), 
-             aes(xintercept = x, color = any_broadcast_burn), lwd = 1, lty = 2) +
+CM_size_burntype %>% 
+  mutate(burntype = ifelse(any_broadcast_burn == T, 'Broadcast burn', 'Pile burn')) %>% 
+  ggplot( aes(as.numeric(trt_acres), as.numeric(VIIRS_detects), 
+                             group = burntype, color = burntype)) +
+  geom_jitter(width = 0, height = .00, alpha = .3) +
+  geom_vline(data = data.frame(burntype = c('Broadcast burn', 'Pile burn'), x = c(50, 25)), aes(xintercept = x, color =burntype), lwd = 1, lty = 2) +
   geom_smooth(method="glm", method.args = list(family = "binomial")) +
   labs(x = 'Treatment size (acres)', y = "Probability of any VIIRS detects",
-       title = 'VIIRS detections vs size', 
-       subtitle = "*EPA's reporting thresholds shown by vertical lines") +
+       title = 'VIIRS detections vs. size', 
+       subtitle = "*EPA's reporting thresholds shown by vertical lines", 
+       color = 'Burn type') +
   #scale_x_continuous(n.breaks = 10)
-  scale_x_log10(n.breaks = 10)
+  scale_x_log10(n.breaks = 10) +
+   scale_color_brewer(palette = 'Set1', direction = -1) +
+  theme(legend.position = 'bottom')
 
 # whats the typical size of treatments? 
 median(CM_size_burntype$trt_acres)

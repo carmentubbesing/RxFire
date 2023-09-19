@@ -1,0 +1,203 @@
+---
+title: "Q3_projects_vs_time"
+author: "Lisa Rosenthal"
+date: "2023-09-18"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(sf)
+library(fs)
+library(units)
+
+theme_set(theme_bw() + theme(panel.grid.minor = element_blank()))
+```
+
+# Question 3
+
+For burn projects that took more than a week to wrap up: How well did the number of days for which thermal anomalies were detected corroborate with the number of days that burners indicated in their project reporting? How does the level of corroboration change as a burn project stretches out longer in time?
+
+## Approach
+
+For every day an activity occurs, assess if there was a VIIRS detection within its treatment polygon. Compare % of temporally correct detections to duration of activity. 
+
+## Prep data
+
+Load VIIRS and CalMAPPER data. CalMapper polygons buffered with a radius of half the VIIRS resolution.
+
+```{r}
+# VIIRS fire detects
+viirs <- read_rds(file.path(ref_path, 'VIIRS/CA_2020/viirs_nonAg.rds')) 
+
+
+# load up CalMAPPER data, created in Q1
+CM_burn2020_buffered <- read_rds(file.path(ref_path, 'CalMAPPER/burnactivities_2020_buffered.rds'))
+CM_trtIDs_buffered <- read_rds(file.path(ref_path, 'CalMAPPER/treatmentgeometries_2020_buffered.rds'))
+```
+
+Get VIIRS points that intersect with the polygons.
+
+```{r}
+# get the viirs points contained in the treatment polygons
+viirs_t <- st_transform(viirs, st_crs(CM_burn2020_buffered))
+
+# find those that intersect, do with each activity
+viirs_int <- viirs_t %>% 
+  filter(CONFIDENCE != 'l') %>% 
+  st_intersection(CM_burn2020_buffered) %>% 
+  mutate(rowname = rownames(.), 
+         pointID = floor(as.numeric(rowname)),
+         overlap_trts = grepl('\\.', rowname),
+         .before = LATITUDE) %>% 
+  group_by(pointID) %>% 
+  mutate(overlap_trts = any(overlap_trts == T)) %>% 
+  ungroup() 
+#print(viirs_int %>% arrange(pointID), width = Inf)
+
+```
+
+
+For every activity, calculate if VIIRS points were detected during CalMAPPER activity. how many points were during the recorded activity? how many detected but outside the activity window?
+
+```{r}
+# each row is a viirs point that intersected a polygon. A single VIIRS point can appear >1 if it intersects more than one activity. Likewise, an activity can appear >1 if there are multiple VIIRS points intersecting it. 
+viirs_matches <- viirs_int %>% 
+  mutate(date_matches_CM = date >= ACTIVITY_START & date <= ACTIVITY_END, 
+         dateadj_matches_CM = date_adj >= ACTIVITY_START & date_adj <= ACTIVITY_END, 
+         .after = date) 
+
+# group by activity and calculate VIIRS detections overlapping it
+mean(yday(viirs_matches$ACTIVITY_START[1]), yday(viirs_matches$ACTIVITY_END[1]))
+matches_activitylevel <- viirs_matches %>% 
+  as_tibble() %>% 
+  mutate(CM_jday = (yday(ACTIVITY_START) + yday(ACTIVITY_END)) / 2) %>% 
+  group_by(AQ_ID, TREATMENT_ID, CM_jday) %>% 
+  summarise(duration = as.numeric(duration[1]),
+            trt_acres = as.numeric(trt_acres[1]),
+            unique_viirs_days = length(unique(date)),
+            n_matching_dates = length(unique(date[date_matches_CM == T])),
+            n_matching_dates_adj = length(unique(date_adj[dateadj_matches_CM == T])), 
+            viirs_jday = mean(unique(jday))
+            ) %>% 
+  arrange(TREATMENT_ID) %>% 
+  ungroup
+print(matches_activitylevel, width = Inf)
+
+# look at duration according to CM vs viirs
+matches_activitylevel %>% 
+  mutate(diff = as.numeric(duration) - unique_viirs_days) %>% 
+  ggplot(aes(diff)) +
+  geom_rect(aes(xmin = -Inf, xmax = 0, ymin = -Inf, ymax = Inf), fill = "lightcyan2") +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = -Inf, ymax = Inf), fill = "indianred1") +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9) +
+  geom_vline(xintercept = 0, lty = 2) +
+  labs(x = "Difference in # of days per activity: \nCalMAPPER - VIIRS", 
+       y = "# of activities") +
+  scale_x_continuous(n.breaks = 10)
+
+# look at average julian day according to CM vs VIIRS
+matches_activitylevel %>% 
+  mutate(diff = CM_jday  - viirs_jday) %>% 
+  ggplot(aes(diff)) +
+  geom_rect(aes(xmin = -Inf, xmax = 0, ymin = -Inf, ymax = Inf), fill = "lightcyan2") +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = -Inf, ymax = Inf), fill = "indianred1") +
+  geom_histogram(color = 'grey20', fill = 'grey70', alpha = .9) +
+  geom_vline(xintercept = 0, lty = 2) +
+  labs(x = "Difference in avg Julian day per activity: \nCalMAPPER - VIIRS", 
+       y = "# of activities") +
+  scale_x_continuous(n.breaks = 10)
+
+
+# look at % of activity days with VIIRS detections vs. duration
+ggplot(matches_activitylevel, 
+       aes(as.numeric(duration), 100 * n_matching_dates/as.numeric(duration))) + 
+  geom_point() + 
+  labs(x = 'Activity duration (days)', 
+       y = "% activity days with VIIRS detections") +
+  scale_y_continuous(limits = c(0, 100))
+
+# # same thing as above but x-axis is activity size
+# matches_activitylevel %>% 
+#   filter(n_matching_dates > 0 ) %>% 
+#   ggplot(aes(trt_acres, 100 * n_matching_dates/as.numeric(duration))) + 
+#   geom_point() + 
+#   labs(x = 'Polygon size (acres)', 
+#        y = "% activity days with VIIRS detections") +
+#   scale_y_continuous(limits = c(0, 100)) +
+#   facet_grid(~ duration <= 7)
+
+# # probability of any VIIRS detections vs. duration
+# ggplot(matches_activitylevel, aes(duration, as.numeric(n_matching_dates != 0))) +
+#   geom_point(alpha = .2) +
+#   geom_smooth(method="glm", method.args = list(family = "binomial")) +
+#   labs(x = 'Activity duration (days)', 
+#        y = "Probability of any VIIRS detections")
+
+# % of activities with no VIIRS detections on those days
+mean(matches_activitylevel$n_matching_dates == 0)
+
+
+
+# number of days spatially overlapping that do not temporally match
+# i.e. the days with satellite detections without calMAPPER records 
+# --> false positives or missing calMAPPER records
+matches_activitylevel %>% 
+  mutate(any_detection = as.numeric(n_matching_dates != 0),
+         dur_class = cut(duration, breaks = seq(0, max(duration) + 7, by = 7), 
+                         labels = F)) %>% 
+  group_by(dur_class) %>% 
+  summarise(Yes = sum(any_detection), 
+            No = n() - Yes) %>%
+  pivot_longer(-dur_class) %>% 
+  ggplot(aes(dur_class, value, group = name, fill = name)) +
+  geom_col() +
+  labs(x = "Activity duration (weeks)", 
+       y = "# of activities", 
+       fill = "VIIRS detected \nduring activity", 
+       title = "When there's spatial overlap, how many activities temporally overlap
+       with at least 1 VIIRS detection?") +
+  scale_x_continuous(n.breaks = 10)
+
+
+
+```
+
+
+Those were just the activities where VIIRS intersecting. how many activities without VIIRS detections? if there were detections (spatial overlap with trt), how many didn't temporally match? Make a pie chart. 
+
+```{r}
+
+spatial <- c('No spatial overlap', 
+           "Spatial overlap", "Spatial overlap")
+temporal <- c("No temporal match", "No temporal match", "Temporal match")
+values <- c(
+  length(unique(CM_burn2020_buffered$AQ_ID)) - length(unique(matches_activitylevel$AQ_ID)),
+  sum(matches_activitylevel$n_matching_dates == 0),
+  sum(matches_activitylevel$n_matching_dates > 0)
+)
+dat <- tibble(spatial, temporal, values) %>% 
+  mutate(percent = round(values/sum(values)*100, 2))
+print(dat)
+
+# viz that breakdown
+treemap::treemap(dat, index = c("spatial", 'temporal'), vSize = "values", type = "index",
+                 align.labels=list(
+        c("center", "center"), 
+        c("center", "bottom")
+        ),                                   
+    overlap.labels = .5, 
+    inflate.labels = F,
+    border.col=c("black","white"),
+    border.lwds=c(3,2),
+    fontsize.labels=c(15,12),
+    palette = 'Set1',
+    title = "CalMAPPER activities: Spatial + temporal overlap with VIIRS")
+
+
+```
+
