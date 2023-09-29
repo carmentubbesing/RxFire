@@ -14,7 +14,7 @@ require(here)
 ```{r}
 rmarkdown::render("prep_CalMapper.Rmd", "html_document")
 rmarkdown::render("prep_FRAP.Rmd", "html_document")
-rmarkdown::render("FRAP_CalMapper.Rmd", "html_document")
 rmarkdown::render("prep_PFIRS.Rmd", "html_document")
+rmarkdown::render("FRAP_CalMapper.Rmd", "html_document")
 ```
 
