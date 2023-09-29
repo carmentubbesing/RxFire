@@ -73,6 +73,14 @@ mat1 <- cbind(nonAgVeg_values, 1)
 cdl_CA_mask <- classify(cdl_CA, mat1, others = 0)
 plot(cdl_CA_mask)
 
+# export crop mask
+writeRaster(cdl_CA_mask, file.path(ref_path, "NASS/CDL/cropmask_2020.tif"))
+```
+
+
+Filter VIIRS points to include non-crop areas. 
+
+```{r}
 # remove VIIRS points outside the non-ag area
 f_extract <- function(mask, points){
   vals <- extract(mask, points)
@@ -144,7 +152,6 @@ mapview::mapview(viirs_filtered, zcol = 'jday', cex = 3)
 # viirs--CA, non-Ag
 write_rds(viirs_nonAg, file = file.path(viirs_dir, 'viirs_nonAg.rds'))
 
-# crop mask
-writeRaster(cdl_CA_mask, file.path(ref_path, "NASS/CDL/cropmask_2020.tif"))
+
 
 ```

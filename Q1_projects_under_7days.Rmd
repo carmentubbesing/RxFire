@@ -209,7 +209,7 @@ viirs_int %>%
 
 # visualize
 mapview::mapview(viirs_overlap, cex = 3, zcol = 'TREATMENT_ID', legend = F) + 
-  mapview::mapview(CM_7days, zcol = 'TREATMENT_NAME', legend= F, alpha.regions = 0.3)
+  mapview::mapview(CM_burn2020_buffered, zcol = 'TREATMENT_NAME', legend= F, alpha.regions = 0.3)
 
 
 ```

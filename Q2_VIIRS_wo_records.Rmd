@@ -1,0 +1,303 @@
+---
+title: "Q2_VIIRS_wo_records"
+author: "Lisa Rosenthal"
+date: "2023-09-19"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(fs)
+library(terra)
+library(mapview)
+library(fasterize)
+
+```
+
+### Functions
+```{r}
+
+# manipulations dont like it when geometries aren't valid. and they don't work with NA validity.
+make_valid <- function(sf_object) {
+  validity <- st_is_valid(sf_object)
+  if (sum(is.na(validity)) > 0) {
+    stop("can't proceed. Contains rows where validity is NA.")
+  } else{
+    if (all(validity)) {
+      return(sf_object)
+    } else{
+      sf_object <- st_make_valid(sf_object)
+      print(glue::glue("there were {sum(validity == F)} not valid geometries"))
+      return(sf_object)
+    }
+  }
+}
+
+# transform to VIIRS crs, select fields you want, make valid
+prep_polys <- function(polygon, columns, points = viirs){
+  message("transforming polygons")
+  polygon <- polygon %>% 
+  st_transform(st_crs(points)) %>% 
+  select(all_of(columns))
+  
+  message("making polygons valid")
+  make_valid(polygon)
+}
+
+
+# extract data. polygons shouldn't overlap, or it wont run.
+extract_polys <- function(polygons, points = viirs) {
+  intersects <- st_intersects(points, polygons, sparse = T)
+  if ( length(unlist(intersects)) == 0)
+    return(warning("No intersections"))
+  else{
+    intersections_list <- map(intersects, unlist)
+    
+    # error if there's more than 1 polygon intersecting a point
+    if(length(unlist(intersections_list)) > nrow(points)){
+     stop("Point(s) overlapped with more than 1 polygon. Not going to run.")
+    # make sure points with no intersection become NA
+      }else{
+      polygonIDs <- map_vec(intersections_list, 
+                           ~ ifelse(sum(.x) == 0, NA, .x) )
+      newcols <- st_drop_geometry(polygons)[polygonIDs, ]
+      return(newcols)
+    }
+  }
+}
+
+```
+
+## Goal
+
+Create a cleaned up version of VIIRS points consisting of high confidence fire points. Was going to turn the points into circles, since it does have a resolution of 375m, but for this level of analysis, I'm keeping them as points. Computation is going to be a lot faster and I doubt I'm introducing that much bias. 
+
+Remove points that are
+- On ag land (already did that with cropland data layer, but use a CA specific one)
+- campgrounds
+- power plants
+- solar farms
+- water
+- intersect at all with urban land. can create stationary hotspots.
+
+Other layers that could be important
+- Jurisdictions/Land management agency
+
+For polygon layers that are wall-to-wall, convert them to rasters. For rasters in general, will want to resample at a resolution of 375 m. For categorical values, use the mode (most common pixel) when aggregating. 
+
+to rid stationary hotspots, could rasterize the points and calculate the density of viirs points during the non-rx fire months. >4 unique days get thrown out? 
+
+## Load CA boundary and VIIRS data
+
+```{r}
+# California boundary
+ca_path <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
+CA <- st_read(ca_path) 
+
+# VIIRS fire detects
+viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
+viirs_shps <- dir_ls(viirs_dir, recurse = T, glob = '*.shp')
+viirs <- map_df(viirs_shps, st_read) %>% st_transform(st_crs(CA))
+viirs <- viirs[CA,]
+
+# vis extent of the two. reminder that I need to redownload VIIRS to completely cover the southern part of CA
+st_make_grid(st_bbox(CA), n = 1) %>% plot(col = 'maroon4')
+st_make_grid(st_bbox(viirs), n = 1) %>% plot(add = T, col = 'tan')
+plot(st_geometry(CA), add = T)
+
+
+```
+
+## Vector based layers
+
+Layers you might want are...
+- counties, 
+- responsibility areas, 
+- campgrounds
+- power plants
+- solar farms
+- land/water
+
+Will want to convert the wall-to-wall layers to rasters. Will be easier to deal with in the future. Use a raster with VIIRS' resolution--375m. 
+
+```{r}
+# wall to wall data
+
+# responsibility areas--local, state, federal
+RA_path <- file.path(ref_path, 'Responsibility areas') %>% 
+  dir_ls(recurse = T, glob = "*shp")
+RA <- st_read(RA_path)
+# make field of interest integer
+#  SRA   SRA_int
+# <chr>   <int>
+# 1 FRA         1
+# 2 LRA         2
+# 3 SRA         3
+RA <- RA %>% mutate(SRA_int = as.integer(as.factor(SRA)), 
+              .after = SRA) 
+
+# USFS
+NF_CA <- st_read(file.path(ref_path, "National Forest Boundaries/USFS_CA.shp"))
+NF_CA
+
+# template raster to rasterize to
+raster_pars <- list(
+  crs = st_crs(viirs)$epsg, 
+  extent = raster::extent(st_bbox(viirs)),
+  res = c(375, 375)
+)
+raster_temp <- with(raster_pars, 
+                    raster::raster(ext = extent, resolution = res, crs = crs))
+
+getmode <- function(v,na.rm) {
+uniqv <- unique(v)
+uniqv[which.max(tabulate(match(v, uniqv)))]
+} 
+getmode(c(1,2,2,2,2,1))
+
+RA_r <- fasterize(RA, raster_temp, field = 'SRA_int', by = "SRA")
+RA_r <- rast(RA_r)
+
+plot(RA_r)
+hist(RA_r$LRA)
+plot(RA_r$LRA)
+values(RA_r$LRA, na.rm = T)
+spatSample(RA_r$LRA, 4, na.rm = T)
+
+RA_rast(RA_r)
+
+plot(RA_r)
+hist(RA_r)
+```
+
+
+
+```{r}
+# load data ==============================================
+
+# counties
+counties <- file.path(ref_path, "Counties") %>% 
+  dir_ls(recurse = T, glob = "*.shp") %>% 
+  st_read
+
+
+
+# campgrounds
+camping_FS <- file.path(ref_path, 'camping/USFS') %>% 
+  dir_ls(recurse = T, glob = '*shp') %>% 
+  st_read %>% 
+  st_transform(st_crs(viirs))
+camping_CA <- file.path(ref_path, 'camping/CA_state_parks') %>% 
+  dir_ls(recurse = T, glob = '*shp') %>% 
+  st_read %>% 
+  st_transform(st_crs(viirs))
+camping_FS <- filter(camping_FS, grepl('camp', PARENTACTI, ignore.case = T))
+camping_FSCA <- camping_FS[CA,]
+camping <- bind_rows(
+  transmute(camping_FSCA, camping = 'USFS'),
+  transmute(camping_CA, camping = "CA")
+)
+
+# power plants--not sure how to filter these. any power plants have gas flares, even solar.
+# larry hunsinger
+powerplants <- file.path(ref_path, 'powerplants') %>% dir_ls(glob = "*geojson") %>% st_read
+powerplants$PriEnergySource %>% unique %>% sort %>% cbind
+powerplants$PlantName %>% unique %>% sort
+
+
+# functions to extract data at VIIRS points ============
+
+# transform to VIIRS crs, select fields you want, make valid
+counties_valid <- prep_polys(counties, c("NAME", 'NAMELSAD'))
+RA_valid <- prep_polys(RA, "SRA")
+camping_valid <- prep_polys(camping, "camping") %>% st_buffer(dist = 375/2)
+
+
+# extract data. polygons shouldn't overlap, or it wont run.
+counties_ex <- extract_polys(counties_valid, viirs) 
+RA_ex <- extract_polys(RA_valid, viirs) 
+camping_ex <- extract_polys(camping_valid, viirs)
+
+
+
+
+
+```
+## Raster layers
+
+```{r}
+# load data ===============
+# NASS crop layer
+cdl_path <- file.path(ref_path, "NASS/CDL/2020_30m_cdls") %>% dir_ls(glob = '*.tif')
+cdl_NASS <- rast(cdl_path)
+
+# crop to CA
+f_crop_to_CA <- function(raster){
+  CA_t <- st_transform(CA, crs(raster))
+  raster_CA <- crop(raster, CA_t)
+  return(raster_CA)
+}
+cdl_NASS_CA <- f_crop_to_CA(cdl_NASS)
+
+# create a mask by identifying classes to keep
+levels_table <- levels(cdl_NASS_CA)[[1]]
+# levels_table$Class_Names
+nonAgVeg <- c('Pasture/Grass', 'Forest', "Shrubland", "Barren", "Christmas Trees",
+              "Nonag/Undefined", "Deciduous Forest", "Evergreen Forest", "Mixed Forest",
+              "Grassland/Pasture", "Woody Wetlands", "Herbaceous Wetlands"
+              )
+nonAgVeg_values <- levels_table$value[levels_table$Class_Names %in% nonAgVeg]
+
+# reclassify the raster to be non-ag vs. not
+mat1 <- cbind(nonAgVeg_values, 1)
+cdl_CA_mask <- classify(cdl_NASS_CA, mat1, others = 0)
+plot(cdl_CA_mask)
+
+# extract with VIIRS
+viirs_t <- st_transform(viirs, crs(cdl_NASS_CA))
+vals <- extract(cdl_CA_mask, viirs_t)
+viirs$cdl_notAg <- vals$Class_Names
+
+```
+
+
+
+```{r}
+
+# TRASH
+
+counties_t <- st_transform(counties, st_crs(RA))
+county_filter <- filter(counties_t, NAME == 'Sacramento')
+RA_filter <- RA[county_filter,]
+st_intersects(RA, county_filter)
+st_intersection(RA, county_filter)
+
+# png(file.path(ref_path, "Responsibility areas/State_Responsibility_Areas.gdb", 'SRA.png'),
+#     width = 6, height = 4, units = 'in', res = 72)
+# plot(RA['SRA'])
+# dev.off()
+
+# # CNRA crop layer -- way too complicated
+# crop_path <- file.path(ref_path, "CNRA/crop_mapping") %>% 
+#   dir_ls(glob = "*2020*.gdb", recurse = T)
+# crop_CNRA <- st_read(crop_path, layer = 'i15_Crop_Mapping_2020') 
+# head(crop_CNRA)
+# cols <- c("SYMB_CLASS", "CLASS1", "CLASS2", "CLASS3", "MAIN_CROP")
+# map(cols, ~ unique(crop_CNRA[[.x]])) %>% set_names(cols)
+
+```
+
+
+
+```{r}
+viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
+viirs_nonAg <- read_rds( file = file.path(viirs_dir, 'viirs_nonAg.rds'))
+viirs_nonAg
+
+viirs_nonAg$SCAN %>% hist
+```
+

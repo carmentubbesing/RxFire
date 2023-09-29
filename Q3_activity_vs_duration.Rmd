@@ -10,6 +10,8 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+# devtools::install_github("r-spatial/mapview@develop")
+library(mapview)
 library(tidyverse)
 library(sf)
 library(fs)
@@ -57,8 +59,9 @@ viirs_int <- viirs_t %>%
   group_by(pointID) %>% 
   mutate(overlap_trts = any(overlap_trts == T)) %>% 
   ungroup() 
-#print(viirs_int %>% arrange(pointID), width = Inf)
+#print(viirs_int %>% arrange(AQ_ID), width = Inf)
 
+  
 ```
 
 
@@ -69,7 +72,10 @@ For every activity, calculate if VIIRS points were detected during CalMAPPER act
 viirs_matches <- viirs_int %>% 
   mutate(date_matches_CM = date >= ACTIVITY_START & date <= ACTIVITY_END, 
          dateadj_matches_CM = date_adj >= ACTIVITY_START & date_adj <= ACTIVITY_END, 
+         dateadj_matches_CM_buffer = (date_adj + 1) >= ACTIVITY_START &
+           (date_adj - 1) <= ACTIVITY_END,
          .after = date) 
+
 
 # group by activity and calculate VIIRS detections overlapping it
 mean(yday(viirs_matches$ACTIVITY_START[1]), yday(viirs_matches$ACTIVITY_END[1]))
@@ -82,11 +88,28 @@ matches_activitylevel <- viirs_matches %>%
             unique_viirs_days = length(unique(date)),
             n_matching_dates = length(unique(date[date_matches_CM == T])),
             n_matching_dates_adj = length(unique(date_adj[dateadj_matches_CM == T])), 
+            n_matching_dates_adj_buffer = length(unique(date_adj[dateadj_matches_CM_buffer == T])), 
             viirs_jday = mean(unique(jday))
             ) %>% 
   arrange(TREATMENT_ID) %>% 
   ungroup
+
+# check it out
 print(matches_activitylevel, width = Inf)
+matches_activitylevel %>% 
+  select(n_matching_dates:n_matching_dates_adj_buffer) %>% 
+  apply(., 2, function(x) sum(x > 0))
+
+# how many activities match with the buffer, but not exact viirs day? 
+# 173 activites don't match either exact or buffered time (212 if exact). 86 match exactly, 39 additional ones with the buffer.
+viirs_matches %>% 
+  as_tibble %>% 
+  group_by(AQ_ID) %>% 
+  summarise(matches_exact = sum(dateadj_matches_CM) > 0,
+            matches_buffer = sum(dateadj_matches_CM_buffer) > 0) %>% 
+  select(-AQ_ID) %>% table
+(39 + 86) / 86 # how many more when you buffer the date? 
+125 / length(unique(CM_burn2020_buffered$AQ_ID)) # brings it up to 18% instead of 12%
 
 # look at duration according to CM vs viirs
 matches_activitylevel %>% 
@@ -198,5 +221,110 @@ treemap::treemap(dat, index = c("spatial", 'temporal'), vSize = "values", type =
     title = "CalMAPPER activities: Spatial + temporal overlap with VIIRS")
 
 
+
 ```
+
+
+Supply Anny with a few tables---activities that spatially overlap with VIIRS and information on how many of the detects actaully temporally occur during the recorded window.
+
+```{r}
+
+# for every activity, return activity data and intersecting viirs dates
+for_anny <- viirs_matches %>% 
+  as_tibble() %>% 
+  select(viirs_date = date_adj, AQ_ID, ACTIVITY_START, ACTIVITY_END, 
+         matches = dateadj_matches_CM) %>% 
+  mutate(ACTIVITY_START = date(ACTIVITY_START),
+         ACTIVITY_END = date(ACTIVITY_END)) %>% 
+  arrange(AQ_ID, viirs_date)
+
+for_anny2 <- viirs_matches %>% 
+  distinct(AQ_ID, date, .keep_all = T) %>% 
+  as_tibble() %>% 
+  group_by(AQ_ID) %>% 
+  summarise(n_viirs_days = length(unique(date)), 
+            n_matches = sum(dateadj_matches_CM), 
+            activ_dur = duration[1])
+
+write_csv(for_anny, 'tmp_outputs/CMactivity_viirs_days.csv')
+write_csv(for_anny2, 'tmp_outputs/CMactivity_viirs_days_summary.csv')
+
+```
+
+Another thing I want to do is to check if there are any VIIRS points that are spatially close to CalMAPPER polygons, but not inside. could the polygons be mapped incorrectly? 
+
+```{r}
+
+# make the calmapper polygon data easier to view on mapviewer. 
+unique_values <- function(values){
+  vals <- values %>% unique %>% sort
+  paste(vals, collapse = ", ")
+}
+CM_trt_simplified <- CM_burn2020_buffered %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise(AGENCY_NAME = unique(AGENCY_NAME), 
+            n_broadcast = sum(broadcast_burn), 
+            n_pile = sum(pile_burn),
+            start_months = unique_values(month(ACTIVITY_START)),
+            end_months = unique_values(month(ACTIVITY_END)),
+            acres_recorded = sum(TREATED_ACRES),
+            acres_polygon = unique(trt_acres), 
+            veg = unique_values(BROAD_VEG_TYPE)
+            )
+
+# identify polygons with activities that spatially and temporally match (buffered = +/-1 day)
+all_trtIDs <- unique(CM_burn2020_buffered$TREATMENT_ID)
+temporal_matches <- matches_activitylevel %>% 
+  group_by(TREATMENT_ID) %>% 
+  summarise(buffered_temp_match = sum(n_matching_dates_adj_buffer > 0) / n()) %>% 
+  mutate(spatial_match = 1)
+trt_overlaps <- bind_rows(
+  temporal_matches, 
+  tibble(TREATMENT_ID = all_trtIDs[!all_trtIDs %in% temporal_matches$TREATMENT_ID], 
+       buffered_temp_match = 0,
+       spatial_match = 0)
+)
+CM_trt_simplified <- left_join(CM_trt_simplified, trt_overlaps)
+
+
+
+
+# constrain to a smaller area. choose some county that has fire. 
+counties <- file.path(ref_path, "Counties") %>% 
+  dir_ls(recurse = T, glob = "*.shp") %>% 
+  st_read %>% 
+  st_transform(st_crs(CM_burn2020_buffered))
+
+sort(counties$NAME)
+mapview(counties, zcol = "NAME")
+counties_filter <- filter(counties, 
+                          NAME %in% c('Nevada', "Sierra", "Placer", "El Dorado"))
+
+# filter viirs and CalMAPPER
+viirs_filter <- viirs_t[counties_filter,] #%>% filter(SATELLITE == 'N') # just suomi
+CM_filtered <- CM_trt_simplified[counties_filter,]
+mapview(CM_filtered,
+        label= "TREATMENT_ID",
+        lwd = 1,
+        zcol =  "buffered_temp_match",
+        legend = F
+        ) +
+mapview(CM_filtered,
+        label= "TREATMENT_ID",
+        lwd = 1,
+        zcol = "spatial_match",
+        legend = F
+        ) +
+  mapview(viirs_filter, zcol = "jday_adj", 
+          at = seq(0, 365, 30),
+          cex = 3, alpha = .5)
+  
+
+# look at particular treatments and their overlap
+viirs_int %>% 
+  filter(TREATMENT_ID == 10572) %>% 
+  print(width = Inf)
+
+```
+
 
