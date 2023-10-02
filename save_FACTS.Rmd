@@ -1,0 +1,24 @@
+---
+title: "save_FACTS"
+output: html_document
+date: '2022-06-27'
+---
+
+
+```{r, include = F}
+require(here)
+require(tidyverse)
+require(sf)
+```
+
+### Load
+```{r}
+facts_comm <- ("~/Reference data/FACTS/FACTS_CommonAttribute_shapefiles/FACTS_CA_comm_2000_later") %>%
+  st_read()
+```
+
+### Save as rdata
+```{r}
+save(facts_comm, file = "C:/Users/ctubbesi/Data_heavy_projects/FACTS/facts_common.Rdata")
+```
+
