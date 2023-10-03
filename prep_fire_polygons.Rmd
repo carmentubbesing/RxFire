@@ -1,0 +1,148 @@
+---
+title: "fire data"
+author: "Lisa Rosenthal"
+date: "2023-10-02"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(fs)
+
+```
+
+Load up CA boundary
+
+```{r}
+# California boundary
+ca_path <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
+CA <- st_read(ca_path) 
+```
+
+
+
+Set parameters 
+
+I want fire data from the year of interest (2020). The CRS is WGS 84 / Pseudo-Mercator, from the CA boundary file. Buffering data with a radius equal to half the VIIRS resolution.
+```{r}
+yr <- 2020
+useCRS <- st_crs(CA) #"epsg:3857" 
+radius <- 375/2
+
+prep_polys <- function(polys, buffer = T){
+  polys <- polys %>% 
+    st_transform(useCRS) %>% 
+    st_make_valid()
+  if(buffer)polys <- st_buffer(polys, radius)
+  return(polys)
+}
+```
+
+## Prep fire data
+
+### FRAP
+
+I want both wildfire and Rx fire data. 
+```{r}
+# load of data
+frap_path <- file.path(ref_path, 'FRAP/fire221gdb/fire22_1.gdb')
+st_layers(frap_path)
+frap_wf <- st_read(frap_path, 'firep22_1')
+# needed to read in rx, write as geojson, reimport. had issues with multisurfaces.
+# frap_rx <- st_read(frap_path, 'rxburn22_1')
+# st_write(frap_rx, file.path(ref_path, 'FRAP/fire221gdb/rxburn22.geojson'))
+frap_rx <- st_read(file.path(ref_path, 'FRAP/fire221gdb/rxburn22.geojson'))
+
+# clean up the data
+# filter by date, remove useless columns, buffer by 375/2
+frap_rx2020 <- frap_rx %>% 
+  filter(year(START_DATE) == yr | year(END_DATE) == yr) %>% 
+  select(-(RX_CONSUM:Shape_Area)) %>% 
+  prep_polys()
+frap_wf2020 <- frap_wf %>% 
+  filter(year(ALARM_DATE) == yr | year(CONT_DATE) == yr) %>% 
+  select(-(CAUSE:Shape_Area)) %>% 
+  prep_polys
+
+# put into a list
+fires <- list(frap_rx = frap_rx2020, 
+     frap_wf = frap_wf2020)
+```
+
+### CalMAPPER
+
+I already worked with CalMAPPER to address question 1 and 3. Save time and load that up. 
+
+```{r}
+CM_burn2020_buffered <- read_rds(file.path(ref_path, 'CalMAPPER/burnactivities_2020_buffered.rds'))
+CM_burn2020_buffered <- prep_polys(CM_burn2020_buffered, F)
+
+# add to list of fire data
+fires$CalMAPPER <- CM_burn2020_buffered
+
+```
+
+### FACTS
+
+The shapefile version of the data isn't complete and I can't download the gdb for some reason. Carmen sent me the data from her pull from a year ago, so using that. 
+
+```{r}
+
+# load data
+path <- dir_ls(file.path(ref_path, 'facts'), 
+               recurse = T, glob = "*Rdata")
+load(path, verbose = T)
+
+# filter more and prep to join list of fire data
+facts20 <- facts_1920 %>% 
+  filter(year(DATE_COMPL) == 2020, 
+         !st_is_empty(.)) %>% 
+  select(FACTS_ID, NAME, ACTIVITY_C, ACTIVITY, DATE_COMPL, COUNTY_NAM) %>% 
+  mutate(polygon_acres = as.numeric(st_area(.) %>% units::set_units('acres')), 
+         .before = geometry)
+
+facts20_prepped <- prep_polys(facts20)
+
+# add to list of fire data
+fires$facts <- facts20_prepped
+
+
+# this is what I'd do.
+# # read in data
+# facts <- st_read(dir_ls(file.path(ref_path, 'facts'), 
+#                 recurse = T, glob = "*Common*shp"))
+# 
+# # this is huge dataset and I don't need all the rows or fields. reduce it down. 
+# # rx fire acivity codes
+# codes <- c(1111, 1112, 1113, 1130, 3340, 4471, 4481, 4491, 4541, 7050, 7015,6101, 2540)
+# facts_sm <- facts %>% 
+#   select(FACTS_ID, NAME, GIS_ACRES, ACTIVITY_C, ACTIVITY, DATE_COMPL, STATE_ABBR) %>% 
+#   filter(ACTIVITY_C %in% codes) %>% 
+#   filter(!st_is_empty(.), STATE_ABBR == 'CA') %>% 
+#   arrange(DATE_COMPL)
+# 
+# # look at it
+# facts_sm
+# 
+# rm(facts); gc() # remove unused stuff from memory
+# 
+# # now that its smaller, transform crs and spatially filter to CA
+# dim(facts_sm)
+# facts_smt <- st_transform(facts_sm, useCRS)
+# facts_CA <- facts_smt[CA,]
+
+
+
+```
+
+
+Export the fire data
+
+```{r}
+write_rds(fires, 'outputs_spatial/vector/fire_records_2020.rds')
+```
+

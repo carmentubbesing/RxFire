@@ -37,8 +37,8 @@ make_valid <- function(sf_object) {
   }
 }
 
-# transform to VIIRS crs, select fields you want, make valid
-prep_polys <- function(polygon, columns, points = viirs){
+# transform to CA crs, select fields you want, make valid
+prep_polys <- function(polygon, columns, points = CA){
   message("transforming polygons")
   polygon <- polygon %>% 
   st_transform(st_crs(points)) %>% 
@@ -49,8 +49,11 @@ prep_polys <- function(polygon, columns, points = viirs){
 }
 
 
-# extract data. polygons shouldn't overlap, or it wont run.
-extract_polys <- function(polygons, points = viirs) {
+# extract data from vector layers
+extract_polys <- function(polygons, points) {
+  #points = viirs_sample
+  #polygons = vector_layers$powerplants
+  
   intersects <- st_intersects(points, polygons, sparse = T)
   if ( length(unlist(intersects)) == 0)
     return(warning("No intersections"))
@@ -59,39 +62,37 @@ extract_polys <- function(polygons, points = viirs) {
     
     # error if there's more than 1 polygon intersecting a point
     if(length(unlist(intersections_list)) > nrow(points)){
-     stop("Point(s) overlapped with more than 1 polygon. Not going to run.")
+     warning("Point(s) overlapped with more than 1 polygon. By default, choosing first one.")
     # make sure points with no intersection become NA
       }else{
       polygonIDs <- map_vec(intersections_list, 
-                           ~ ifelse(sum(.x) == 0, NA, .x) )
+                           ~ ifelse(sum(.x) == 0, NA, .x[1]) )
       newcols <- st_drop_geometry(polygons)[polygonIDs, ]
-      return(newcols)
+      return(as_tibble(newcols))
     }
   }
 }
 
 ```
-
 ## Goal
 
-Create a cleaned up version of VIIRS points consisting of high confidence fire points. Was going to turn the points into circles, since it does have a resolution of 375m, but for this level of analysis, I'm keeping them as points. Computation is going to be a lot faster and I doubt I'm introducing that much bias. 
+Create a cleaned up version of VIIRS points consisting of high confidence fire points. 
 
 Remove points that are
-- On ag land (already did that with cropland data layer, but use a CA specific one)
+- On ag land, urban, water (from NASS CDL)
 - campgrounds
 - power plants
 - solar farms
-- water
-- intersect at all with urban land. can create stationary hotspots.
 
 Other layers that could be important
 - Jurisdictions/Land management agency
 
-For polygon layers that are wall-to-wall, convert them to rasters. For rasters in general, will want to resample at a resolution of 375 m. For categorical values, use the mode (most common pixel) when aggregating. 
 
-to rid stationary hotspots, could rasterize the points and calculate the density of viirs points during the non-rx fire months. >4 unique days get thrown out? 
+to rid stationary hotspots, could rasterize the points and calculate the density of viirs points during the non-rx fire months. >4 unique days get thrown out? need to mask out wildfire.
 
-## Load CA boundary and VIIRS data
+## Load CA boundary data
+
+Reminder that I need to redownload VIIRS to completely cover the southern part of CA!
 
 ```{r}
 # California boundary
@@ -101,10 +102,29 @@ CA <- st_read(ca_path)
 # VIIRS fire detects
 viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
 viirs_shps <- dir_ls(viirs_dir, recurse = T, glob = '*.shp')
+viirs_shps <- viirs_shps[!grepl("viirs_nonAg", viirs_shps)] # don't want that file
 viirs <- map_df(viirs_shps, st_read) %>% st_transform(st_crs(CA))
 viirs <- viirs[CA,]
 
-# vis extent of the two. reminder that I need to redownload VIIRS to completely cover the southern part of CA
+# get viirs into PST, not UTC
+viirs <- viirs %>%
+  mutate(
+    # get datetime in PST
+    .before = ACQ_DATE,
+    hour = str_sub(ACQ_TIME, 1, 2),
+    minute = str_sub(ACQ_TIME, 3, 4),
+    time = paste(hour, minute, sep = ':'),
+    datetime = ymd_hm(paste(ACQ_DATE, time)) %>% with_tz('US/Pacific'),
+    date = date(datetime),
+    # detects in the middle of the night (e.g. 3am) should be considered night before
+    date_adj = case_when(DAYNIGHT == 'N' ~ date - 1, T ~ date),
+    jday = yday(date),
+    jday_adj = ifelse(DAYNIGHT == 'N', yday(date_adj), jday),
+  ) %>%
+  select(-c(hour, minute, time, ACQ_DATE, ACQ_TIME)) 
+
+
+# vis extent of the two. 
 st_make_grid(st_bbox(CA), n = 1) %>% plot(col = 'maroon4')
 st_make_grid(st_bbox(viirs), n = 1) %>% plot(add = T, col = 'tan')
 plot(st_geometry(CA), add = T)
@@ -112,192 +132,75 @@ plot(st_geometry(CA), add = T)
 
 ```
 
-## Vector based layers
-
-Layers you might want are...
-- counties, 
-- responsibility areas, 
-- campgrounds
-- power plants
-- solar farms
-- land/water
-
-Will want to convert the wall-to-wall layers to rasters. Will be easier to deal with in the future. Use a raster with VIIRS' resolution--375m. 
-
+Import the data to extract with the VIIRS points
 ```{r}
-# wall to wall data
 
-# responsibility areas--local, state, federal
-RA_path <- file.path(ref_path, 'Responsibility areas') %>% 
-  dir_ls(recurse = T, glob = "*shp")
-RA <- st_read(RA_path)
-# make field of interest integer
-#  SRA   SRA_int
-# <chr>   <int>
-# 1 FRA         1
-# 2 LRA         2
-# 3 SRA         3
-RA <- RA %>% mutate(SRA_int = as.integer(as.factor(SRA)), 
-              .after = SRA) 
+vector_layers <- read_rds(file.path(ref_path, 'merged data layers/vector', 'extract_viirs.rds'))
+rasts <- rast(file.path(ref_path, 'merged data layers/raster', 'extract_viirs.tif'))
 
-# USFS
-NF_CA <- st_read(file.path(ref_path, "National Forest Boundaries/USFS_CA.shp"))
-NF_CA
-
-# template raster to rasterize to
-raster_pars <- list(
-  crs = st_crs(viirs)$epsg, 
-  extent = raster::extent(st_bbox(viirs)),
-  res = c(375, 375)
-)
-raster_temp <- with(raster_pars, 
-                    raster::raster(ext = extent, resolution = res, crs = crs))
-
-getmode <- function(v,na.rm) {
-uniqv <- unique(v)
-uniqv[which.max(tabulate(match(v, uniqv)))]
-} 
-getmode(c(1,2,2,2,2,1))
-
-RA_r <- fasterize(RA, raster_temp, field = 'SRA_int', by = "SRA")
-RA_r <- rast(RA_r)
-
-plot(RA_r)
-hist(RA_r$LRA)
-plot(RA_r$LRA)
-values(RA_r$LRA, na.rm = T)
-spatSample(RA_r$LRA, 4, na.rm = T)
-
-RA_rast(RA_r)
-
-plot(RA_r)
-hist(RA_r)
 ```
 
-
-
-```{r}
-# load data ==============================================
-
-# counties
-counties <- file.path(ref_path, "Counties") %>% 
-  dir_ls(recurse = T, glob = "*.shp") %>% 
-  st_read
-
-
-
-# campgrounds
-camping_FS <- file.path(ref_path, 'camping/USFS') %>% 
-  dir_ls(recurse = T, glob = '*shp') %>% 
-  st_read %>% 
-  st_transform(st_crs(viirs))
-camping_CA <- file.path(ref_path, 'camping/CA_state_parks') %>% 
-  dir_ls(recurse = T, glob = '*shp') %>% 
-  st_read %>% 
-  st_transform(st_crs(viirs))
-camping_FS <- filter(camping_FS, grepl('camp', PARENTACTI, ignore.case = T))
-camping_FSCA <- camping_FS[CA,]
-camping <- bind_rows(
-  transmute(camping_FSCA, camping = 'USFS'),
-  transmute(camping_CA, camping = "CA")
-)
-
-# power plants--not sure how to filter these. any power plants have gas flares, even solar.
-# larry hunsinger
-powerplants <- file.path(ref_path, 'powerplants') %>% dir_ls(glob = "*geojson") %>% st_read
-powerplants$PriEnergySource %>% unique %>% sort %>% cbind
-powerplants$PlantName %>% unique %>% sort
-
-
-# functions to extract data at VIIRS points ============
-
-# transform to VIIRS crs, select fields you want, make valid
-counties_valid <- prep_polys(counties, c("NAME", 'NAMELSAD'))
-RA_valid <- prep_polys(RA, "SRA")
-camping_valid <- prep_polys(camping, "camping") %>% st_buffer(dist = 375/2)
-
-
-# extract data. polygons shouldn't overlap, or it wont run.
-counties_ex <- extract_polys(counties_valid, viirs) 
-RA_ex <- extract_polys(RA_valid, viirs) 
-camping_ex <- extract_polys(camping_valid, viirs)
-
-
-
-
-
-```
-## Raster layers
+Extract data with VIIRS points. 
 
 ```{r}
-# load data ===============
-# NASS crop layer
-cdl_path <- file.path(ref_path, "NASS/CDL/2020_30m_cdls") %>% dir_ls(glob = '*.tif')
-cdl_NASS <- rast(cdl_path)
 
-# crop to CA
-f_crop_to_CA <- function(raster){
-  CA_t <- st_transform(CA, crs(raster))
-  raster_CA <- crop(raster, CA_t)
-  return(raster_CA)
-}
-cdl_NASS_CA <- f_crop_to_CA(cdl_NASS)
+# raster data
+extracted_rasters <- terra::extract(x = rasts, viirs)
 
-# create a mask by identifying classes to keep
-levels_table <- levels(cdl_NASS_CA)[[1]]
-# levels_table$Class_Names
-nonAgVeg <- c('Pasture/Grass', 'Forest', "Shrubland", "Barren", "Christmas Trees",
-              "Nonag/Undefined", "Deciduous Forest", "Evergreen Forest", "Mixed Forest",
-              "Grassland/Pasture", "Woody Wetlands", "Herbaceous Wetlands"
-              )
-nonAgVeg_values <- levels_table$value[levels_table$Class_Names %in% nonAgVeg]
 
-# reclassify the raster to be non-ag vs. not
-mat1 <- cbind(nonAgVeg_values, 1)
-cdl_CA_mask <- classify(cdl_NASS_CA, mat1, others = 0)
-plot(cdl_CA_mask)
+# vector data
+vector_names <- list("county",
+                     "camping",
+                     c("power_source", 'power_capacity'),
+                     "solar")
+tictoc::tic()
+extracted_vectors <- map(vector_layers, ~ extract_polys(.x, viirs)) %>% 
+  map2(., vector_names, ~ set_names(.x, .y)) %>% # rename the columns
+  bind_cols()
+tictoc::toc() # 21sec
 
-# extract with VIIRS
-viirs_t <- st_transform(viirs, crs(cdl_NASS_CA))
-vals <- extract(cdl_CA_mask, viirs_t)
-viirs$cdl_notAg <- vals$Class_Names
+# Check out how often viirs intersects with these things...
+# not much. The points (e.g. camping) probably underesimated, but oh well. 
+apply(extracted_vectors, 2, function(x) 100 * mean(!is.na(x)))
+
+viirs_ex <- tibble(viirs, extracted_rasters, extracted_vectors)
+
 
 ```
 
 
+## Fire data
+
 
 ```{r}
+yr <- 2020
 
-# TRASH
 
-counties_t <- st_transform(counties, st_crs(RA))
-county_filter <- filter(counties_t, NAME == 'Sacramento')
-RA_filter <- RA[county_filter,]
-st_intersects(RA, county_filter)
-st_intersection(RA, county_filter)
+frap_path <- file.path(ref_path, 'FRAP/fire221gdb/fire22_1.gdb')
+st_layers(frap_path)
+frap_rx <- st_read(frap_path, 'rxburn22_1')
+frap_wf <- st_read(frap_path, 'firep22_1')
 
-# png(file.path(ref_path, "Responsibility areas/State_Responsibility_Areas.gdb", 'SRA.png'),
-#     width = 6, height = 4, units = 'in', res = 72)
-# plot(RA['SRA'])
-# dev.off()
-
-# # CNRA crop layer -- way too complicated
-# crop_path <- file.path(ref_path, "CNRA/crop_mapping") %>% 
-#   dir_ls(glob = "*2020*.gdb", recurse = T)
-# crop_CNRA <- st_read(crop_path, layer = 'i15_Crop_Mapping_2020') 
-# head(crop_CNRA)
-# cols <- c("SYMB_CLASS", "CLASS1", "CLASS2", "CLASS3", "MAIN_CROP")
-# map(cols, ~ unique(crop_CNRA[[.x]])) %>% set_names(cols)
+frap_rx2020 <- frap_rx %>% 
+  filter(year(START_DATE) == yr | year(END_DATE) == yr)
+frap_wf2020 <- frap_wf %>% 
+  filter(year(ALARM_DATE) == yr | year(CONT_DATE) == yr)
 
 ```
 
 
+Identify areas with VIIRS hotspots? Make sure they're outside of wildfire perimeters.
+
+To rid stationary hotspots, could rasterize the points and calculate the density of viirs points during the non-rx fire months. >4 unique days get thrown out? It's probably just picking up wildfire, which will get masked out anyways. 
 
 ```{r}
-viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
-viirs_nonAg <- read_rds( file = file.path(viirs_dir, 'viirs_nonAg.rds'))
-viirs_nonAg
+months_noRxfire <- c(7:9)
+viirs_summer <- viirs %>% 
+  filter(month(date_adj) %in% months_noRxfire)
+viirs_density <- rasterize(viirs_summer, rasts$SRA, fun = 'length')
+plot(viirs_density>= 4)
 
-viirs_nonAg$SCAN %>% hist
 ```
+
+
 

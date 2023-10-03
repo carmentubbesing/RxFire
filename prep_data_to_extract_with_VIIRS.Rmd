@@ -69,18 +69,6 @@ Update: I tried doing that in R, but fasterize (the only one that doesn't take f
 ca_path <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
 CA <- st_read(ca_path) 
 
-# # VIIRS fire detects
-# viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
-# viirs_shps <- dir_ls(viirs_dir, recurse = T, glob = '*.shp')
-# viirs <- map_df(viirs_shps, st_read) %>% st_transform(st_crs(CA))
-# viirs <- viirs[CA,]
-# 
-# # vis extent of the two. reminder that I need to redownload VIIRS to completely cover the southern part of CA
-# st_make_grid(st_bbox(CA), n = 1) %>% plot(col = 'maroon4')
-# st_make_grid(st_bbox(viirs), n = 1) %>% plot(add = T, col = 'tan')
-# plot(st_geometry(CA), add = T)
-
-
 ```
 
 ## raster data
@@ -174,11 +162,11 @@ counties_valid <- prep_polys(counties, c("NAME"))
 camping_FS <- file.path(ref_path, 'camping/USFS') %>% 
   dir_ls(recurse = T, glob = '*shp') %>% 
   st_read %>% 
-  st_transform(st_crs(viirs))
+  st_transform(st_crs(CA))
 camping_CA <- file.path(ref_path, 'camping/CA_state_parks') %>% 
   dir_ls(recurse = T, glob = '*shp') %>% 
   st_read %>% 
-  st_transform(st_crs(viirs))
+  st_transform(st_crs(CA))
 camping_FS <- filter(camping_FS, grepl('camp', PARENTACTI, ignore.case = T))
 camping_FSCA <- camping_FS[CA,]
 camping <- bind_rows(
@@ -217,9 +205,9 @@ Export the data
 ```{r}
 
 write_rds(vector_layers, 
-          file.path(ref_path, 'merged data layers/vector', 'extract_viirs.rds'))
+          file.path('outputs_spatial/vector', 'extract_viirs.rds'))
 writeRaster(rasts, 
-          file.path(ref_path, 'merged data layers/raster', 'extract_viirs.tif'))
+          file.path('outputs_spatial/raster', 'extract_viirs.tif'))
 
 ```
 
