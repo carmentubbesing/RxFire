@@ -21,38 +21,10 @@ library(fasterize)
 ### Functions
 ```{r}
 
-# manipulations dont like it when geometries aren't valid. and they don't work with NA validity.
-make_valid <- function(sf_object) {
-  validity <- st_is_valid(sf_object)
-  if (sum(is.na(validity)) > 0) {
-    stop("can't proceed. Contains rows where validity is NA.")
-  } else{
-    if (all(validity)) {
-      return(sf_object)
-    } else{
-      sf_object <- st_make_valid(sf_object)
-      print(glue::glue("there were {sum(validity == F)} not valid geometries"))
-      return(sf_object)
-    }
-  }
-}
-
-# transform to CA crs, select fields you want, make valid
-prep_polys <- function(polygon, columns, points = CA){
-  message("transforming polygons")
-  polygon <- polygon %>% 
-  st_transform(st_crs(points)) %>% 
-  select(all_of(columns))
-  
-  message("making polygons valid")
-  make_valid(polygon)
-}
-
-
 # extract data from vector layers
 extract_polys <- function(polygons, points) {
-  #points = viirs_sample
-  #polygons = vector_layers$powerplants
+  # polygons = vector_layers$solar
+  # points = viirs[1:5000,"point_id"]
   
   intersects <- st_intersects(points, polygons, sparse = T)
   if ( length(unlist(intersects)) == 0)
@@ -60,19 +32,28 @@ extract_polys <- function(polygons, points) {
   else{
     intersections_list <- map(intersects, unlist)
     
-    # error if there's more than 1 polygon intersecting a point
-    if(length(unlist(intersections_list)) > nrow(points)){
-     warning("Point(s) overlapped with more than 1 polygon. By default, choosing first one.")
+    # warning if there's more than 1 polygon intersecting a point
+    if(any(map_vec(intersections_list, length) > 1)){
+      warning("Point(s) overlapped with more than 1 polygon. By default, choosing first one.")}
     # make sure points with no intersection become NA
-      }else{
-      polygonIDs <- map_vec(intersections_list, 
-                           ~ ifelse(sum(.x) == 0, NA, .x[1]) )
-      newcols <- st_drop_geometry(polygons)[polygonIDs, ]
-      return(as_tibble(newcols))
-    }
+    polygonIDs <- map_vec(intersections_list, 
+                          ~ ifelse(sum(.x) == 0, NA, .x[1]) )
+    newcols <- st_drop_geometry(polygons)[polygonIDs, ]
+    return(as_tibble(newcols))
   }
 }
 
+# add geometry id
+add_geomID <- function(sf_object){
+  # ensure geometry column is named properly
+  st_geometry(sf_object) <- 'geometry'
+  # add geom id
+  sf_object %>%
+  mutate(geom_id = row_number(), .before = geometry) %>% 
+  group_by(geometry) %>%
+  mutate(geom_id = ifelse(n() > 1, geom_id[1], geom_id)) %>% 
+  ungroup()
+}
 ```
 ## Goal
 
@@ -121,7 +102,8 @@ viirs <- viirs %>%
     jday = yday(date),
     jday_adj = ifelse(DAYNIGHT == 'N', yday(date_adj), jday),
   ) %>%
-  select(-c(hour, minute, time, ACQ_DATE, ACQ_TIME)) 
+  select(-c(hour, minute, time, ACQ_DATE, ACQ_TIME)) %>% 
+  mutate(point_id = row_number(), .before = LATITUDE)
 
 
 # vis extent of the two. 
@@ -132,11 +114,14 @@ plot(st_geometry(CA), add = T)
 
 ```
 
+
+## Extract things around the VIIRS points
+
 Import the data to extract with the VIIRS points
 ```{r}
 
-vector_layers <- read_rds(file.path(ref_path, 'merged data layers/vector', 'extract_viirs.rds'))
-rasts <- rast(file.path(ref_path, 'merged data layers/raster', 'extract_viirs.tif'))
+vector_layers <- read_rds('outputs_spatial/vector/extract_viirs.rds')
+rasts <- rast('outputs_spatial/raster/extract_viirs.tif')
 
 ```
 
@@ -148,16 +133,18 @@ Extract data with VIIRS points.
 extracted_rasters <- terra::extract(x = rasts, viirs)
 
 
+
 # vector data
-vector_names <- list("county",
-                     "camping",
+vector_names <- list(c("county"),
+                     c("camping"),
                      c("power_source", 'power_capacity'),
-                     "solar")
+                     c("solar"))
 tictoc::tic()
 extracted_vectors <- map(vector_layers, ~ extract_polys(.x, viirs)) %>% 
-  map2(., vector_names, ~ set_names(.x, .y)) %>% # rename the columns
-  bind_cols()
-tictoc::toc() # 21sec
+  map2(., vector_names, ~ set_names(.x, .y)) %>% 
+  bind_cols
+tictoc::toc() # 26.6sec
+
 
 # Check out how often viirs intersects with these things...
 # not much. The points (e.g. camping) probably underesimated, but oh well. 
@@ -171,20 +158,64 @@ viirs_ex <- tibble(viirs, extracted_rasters, extracted_vectors)
 
 ## Fire data
 
+I combined fire data in the script `prep_fire_polygons.Rmd`. It combines FRAP (rx and wildfire), CalMAPPER, and FACTS. Also extract fire data, similar to above.
+
+Originally I wanted information about all polygons, even those that were overlapping each other, but I needed to create a loop that took forever. So, still extracting information on the first intersecting polygon.
 
 ```{r}
-yr <- 2020
+fires <- read_rds(here::here('outputs_spatial/vector/fire_records_2020.rds'))
+
+# assign a polygon ID to each polygon. Seems like the datasets don't always have a unique ID for each row. 
+fires <- map(fires, add_geomID)
+
+# choose the columns to be extracted from each layer
+cols_to_keep <- list(
+  frap_rx = c("geom_id", "TREATMENT_ID", "TREATMENT_NAME", "AGENCY", "START_DATE", "END_DATE", 'TREATED_AC'),
+  frap_wf = c("geom_id", "INC_NUM", "FIRE_NAME", "AGENCY", "ALARM_DATE", "CONT_DATE"),
+  CalMAPPER = c("geom_id", "TREATMENT_ID", "AQ_ID", 'pile_burn', 'broadcast_burn', "ACTIVITY_START", "ACTIVITY_END", "duration"), 
+  FACTS = c("geom_id", "FACTS_ID", "NAME", "ACTIVITY", "DATE_COMPL")
+)
+fires <- map2(fires, cols_to_keep, ~ select(.x, all_of(.y)))
 
 
-frap_path <- file.path(ref_path, 'FRAP/fire221gdb/fire22_1.gdb')
-st_layers(frap_path)
-frap_rx <- st_read(frap_path, 'rxburn22_1')
-frap_wf <- st_read(frap_path, 'firep22_1')
+# extract fire data. 
+tictoc::tic()
+extracted_fires <- map(fires, ~ extract_polys(.x, viirs))
+tictoc::toc() # 26.6sec
 
-frap_rx2020 <- frap_rx %>% 
-  filter(year(START_DATE) == yr | year(END_DATE) == yr)
-frap_wf2020 <- frap_wf %>% 
-  filter(year(ALARM_DATE) == yr | year(CONT_DATE) == yr)
+# add prefixes to column names and join.
+prefixes <- c("FRAPrx", "FRAPwf", "CM", "FACTS")
+add_prefix <- function(df, prefix){
+  names(df) <- glue::glue("{prefix}_{names(df)}")
+  return(df)
+}
+extracted_fires <- map2(extracted_fires, prefixes, add_prefix) %>% 
+  bind_cols()
+
+```
+
+Ok, now I've extracted info on fires and things that might affect viirs detections. Let's make sure the extractions make sense adn then merge it all together. 
+
+```{r}
+# same number of rows. good. merge it together. 
+dim(viirs_ex)
+dim(extracted_fires)
+viirs_ex <- tibble(viirs_ex, extracted_fires)
+```
+
+
+Filter out VIIRS points that spatially AND temporally overlap with wildfires for now. Wow, there are still ~49k VIIRS detections. 
+```{r}
+
+# these viirs points spatially and temporally overlap with wildfire. Remove for now. 
+viirs_wf <- viirs_ex %>% 
+  filter(!is.na(FRAPwf_geom_id) &
+           date_adj >= FRAPwf_ALARM_DATE & date_adj <= FRAPwf_CONT_DATE) 
+
+# these should theoretically be from things other than wildfire. 
+viirs_notwf <- viirs_ex %>% 
+  filter(!point_id %in% viirs_wf$point_id)
+nrow(viirs_notwf)
 
 ```
 
@@ -195,11 +226,14 @@ To rid stationary hotspots, could rasterize the points and calculate the density
 
 ```{r}
 months_noRxfire <- c(7:9)
-viirs_summer <- viirs %>% 
-  filter(month(date_adj) %in% months_noRxfire)
+viirs_summer <- viirs_notwf %>% 
+  filter(month(date_adj) %in% months_noRxfire) %>% 
+  st_as_sf(sf_column_name = "geometry")
 viirs_density <- rasterize(viirs_summer, rasts$SRA, fun = 'length')
-plot(viirs_density>= 4)
 
+# percentage of pixels with >= 4 VIIRS detections in the summer 
+global(viirs_density >= 4, fun = function(x) mean(x, na.rm = T)*100)
+hist(viirs_density)
 ```
 
 
