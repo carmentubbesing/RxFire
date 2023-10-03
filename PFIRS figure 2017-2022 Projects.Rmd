@@ -1,0 +1,97 @@
+---
+title: "PFIRS figure 2017-2022"
+output: html_document
+date: "2023-09-12"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+```
+
+# Load data
+
+## PFIRS
+```{r}
+load("Rdata/PFIRS_2017-2022_pulled2023_noNF.Rdata")
+```
+
+## FRAP
+```{r}
+file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022_noNF.Rdata", sep = "")
+load(file)
+```
+
+### CalMapper
+```{r}
+load("Rdata/CalMapper_activities_fire.Rdata")
+```
+
+# Format PFIRS
+```{r}
+PFIRS_count <- sf_new_noNF %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  count() %>% 
+  filter(Year %in% seq(2017, 2022)) %>% 
+  mutate(source = "PFIRS") %>% 
+  ungroup()
+PFIRS_count
+```
+
+# Format FRAP
+```{r}
+FRAP_count <- frap %>% 
+  st_drop_geometry() %>% 
+  mutate(Year = YEAR_) %>% 
+  group_by(Year) %>% 
+  count() %>% 
+  filter(Year %in% seq(2017, 2022)) %>% 
+  mutate(source = "FRAP") %>% 
+  mutate(Year = as.numeric(Year)) %>% 
+  ungroup()
+```
+
+# Join PFIRS and FRAP
+```{r}
+counts <- full_join(FRAP_count, PFIRS_count)
+counts
+```
+
+# Format CalMapper
+
+```{r}
+calmapper_count <- act_sf_fire %>% 
+  st_drop_geometry() %>% 
+  group_by(YEAR) %>% 
+  count() %>% 
+  mutate(source = "CalMapper") %>% 
+  rename(Year = YEAR) %>% 
+  filter(Year != 2023) %>% 
+  ungroup()
+calmapper_count
+```
+
+# Add CalMapper to table
+```{r}
+counts <- full_join(counts, calmapper_count)
+counts
+```
+
+
+# Plot
+```{r}
+ggplot(counts)+
+  geom_col(aes(x = Year, y = n, fill = source), position = "dodge")+
+  scale_x_continuous(breaks = seq(2017,2022))+
+  scale_fill_manual(values = c("#00ba38", "#ee936b", "#619cff"))+
+  theme_minimal()+
+  ylab("Number of records")+
+  xlab("")
+```
+
+```{r}
+ggsave("figures/PFIRS_FRAP_CalMapper_2017-2022_counts.png", width = 5, height = 3)
+```
+
+
