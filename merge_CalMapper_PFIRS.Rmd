@@ -27,11 +27,11 @@ load(file)
 ```
 
 ```{r}
-file = "Rdata/PFIRS_2017-2022_pulled2023.Rdata"
+file = "Rdata/PFIRS_2017-2022_pull2023.Rdata"
 load(file)
 ```
 
-# Filter by year
+# Filter to years 2020-2022
 
 ## Check whether YEAR matches activity dates in CalMapper
 ```{r}
@@ -48,7 +48,7 @@ cm %>%
   geom_point(position = position_jitter())
 ```
 
-Yup, it doesn't look like there are 
+Yup, it doesn't look like there are issues
 
 ## CalMapper
 ```{r}
@@ -71,7 +71,7 @@ pfirs <- pfirs %>%
 ```
 
 
-# Filter by size
+# Filter by size according to AERR thresholds
 
 ## CalMapper
 ```{r}
@@ -175,19 +175,20 @@ cm <- cm %>%
 pfirs_buff <- st_buffer(pfirs, dist = 1000)
 ```
 
+### Plot using mapview
 ```{r}
 st_crs(pfirs) == st_crs(cm)
 
 mapview(pfirs, zcol = "Year", col.regions = colors, alpha.regions = 0.5)+
   mapview(cm, zcol = "Year", col.regions = colors,  alpha.regions = 0.5)+
-  mapview(pfirs_buff, zcol = "Year", col.regions = colors, alpha.regions = 0.7)
+  mapview(pfirs_buff, zcol = "Year", col.regions = colors, alpha.regions = 0.3)
 ```
 
 # Find duplicates
 
 ## Rename columns with identifier for source
 ```{r}
-pfirs_buff <- pfirs_buff %>% 
+pfirs_buff_dups <- pfirs_buff %>% 
   rename(Year_pfirs = Year) %>% 
   rename(Date_pfirs = Burn_Date) %>% 
   rename(ID_PFIRS_CT = ID_CT) %>% 
@@ -196,7 +197,7 @@ pfirs_buff <- pfirs_buff %>%
 ```
 
 ```{r}
-cm <- cm %>% 
+cm_dups <- cm %>% 
   ungroup %>% 
   rename(Year_cm = Year) %>% 
   rename(ACTIVITY_START_cm = ACTIVITY_START) %>% 
@@ -208,8 +209,9 @@ cm <- cm %>%
 
 ## Spatial overlay
 ```{r}
-dups <- st_intersection(pfirs_buff, cm)
+dups <- st_intersection(pfirs_buff_dups, cm_dups)
 ```
+
 
 ## Filter `dups` to only rows where dates are similar between the two data sets
 
@@ -226,43 +228,44 @@ dups <- dups %>%
   mutate(diff_dates_end = difftime(Date_pfirs, ACTIVITY_END_cm, units = "days"))
 ```
 
-### Map places with far away dates to see if they appear to be the same treatment
-```{r}
-maybe_dups <- dups %>% 
-  filter((diff_dates_start>30 & diff_dates_end>30) | (diff_dates_start< -30 & diff_dates_end< -30)) %>% 
-  select(ID_PFIRS_CT, ID_CM_Trt, Year_pfirs, Year_cm, Date_pfirs, ACTIVITY_START_cm, ACTIVITY_END_cm, acres_pfirs, acres_cm, Agency_pfirs, Agency_cm)
-maybe_dups_point <- pfirs %>% 
-  filter(ID_CT %in% maybe_dups$ID_PFIRS_CT) 
-maybe_dups_point <- maybe_dups_point %>% 
-   mutate(month_day_pfirs = paste(month(maybe_dups_point$Burn_Date), day(maybe_dups_point$Burn_Date), sep = "-")) 
-```
-
-```{r}
-#colors = list("red", "blue", "yellow")
-mapview(pfirs, zcol = "Year",  alpha.regions = 0.3)+
-  mapview(cm, zcol = "Year_cm",   alpha.regions = 0.3)+
-  #mapview(pfirs_buff, zcol = "Year_pfirs", alpha.regions = 0.3)+
-  #mapview(maybe_dups, col.regions = "green",alpha.regions = 0.3)+
-  mapview(maybe_dups_point, col.regions = "green", alpha.regions = 0.3)
-```
-
-```{r}
-st_write(maybe_dups, dsn = "shapefiles", layer = "potential_duplicates_CalMapper_PFIRS", driver = "ESRI Shapefile", delete_layer = T)
-st_write(maybe_dups_point, dsn = "shapefiles", layer = "potential_duplicates_CalMapper_PFIRS_POINT", driver = "ESRI Shapefile", delete_layer = T)
-
-```
-
 # Remove PFIRS points that meet the following criteria:
     -  within 30 days of CalMapper polygon, AND
     -  within 1 km of the same polygon
     
 ```{r}
 dups <- dups %>% 
-  filter(abs(diff_dates_start)<30) 
+  filter(abs(diff_dates_start)<30 | abs(diff_dates_end) < 30) 
+```
+
+## View
+```{r}
+mapview(pfirs_buff_dups, alpha.regions = 0.3)+
+  mapview(cm_dups, alpha.regions = 0.3, col.regions = "red") + 
+  mapview(dups, alpha.regions = 0.3, col.regions = "yellow")
 ```
     
 ```{r}
-#st_write(dups, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS", driver = "ESRI Shapefile", delete_layer = T)
+print(paste("There are ", nrow(dups), "rows that are duplicated."))
+print(paste("-  Of those, there are ", length(unique(dups$ID_PFIRS_CT)), "unique PFIRS records"))
+print(paste("-  and ", length(unique(dups$ID_CM_Trt)), "unique CalMapper records"))
+```
+
+## Write to shapefile
+
+### Rename columns that end up duplicated when truncated
+```{r}
+sort(names(dups))
+```
+
+```{r}
+dups_esri <- dups %>% 
+  rename(Obj = TREATMENT_OBJECTIVE) %>% 
+  select(-TREATMENT_SHAPE, -Data_source, -Data_source.1)
+```
+
+
+```{r}
+st_write(dups_esri, dsn = "shapefiles", layer = "duplicates_final", driver = "ESRI Shapefile", delete_layer = T)
 
 dups_point <- pfirs %>% 
   filter(ID_CT %in% dups$ID_PFIRS_CT) 
@@ -270,19 +273,19 @@ dups_point <- pfirs %>%
 #st_write(dups_point, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS_POINT", driver = "ESRI Shapefile", delete_layer = T)
 ```
 
-# Remove duplicates from PFIRS
+# Handle Duplicates
+
+## Method 1: Remove PFIRS points 
+
+### Remove duplicates from PFIRS
 ```{r}
-pfirs <- pfirs %>% 
+pfirs_no_dups <- pfirs %>% 
   filter(!ID_CT %in% dups$ID_PFIRS_CT)
 ```
 
-# Combine pfirs and CalMapper
+### Combine pfirs and CalMapper
 
-## Sync column names
-```{r}
-names(cm)
-```
-
+#### Sync column names
 ```{r}
 cm_merge <- cm %>% 
   rename(Agency = Agency_cm,
@@ -297,14 +300,16 @@ cm_merge <- cm %>%
   st_drop_geometry()
 ```
 
+
 ```{r}
-pfirs_merge <- pfirs %>% 
+pfirs_merge <- pfirs_no_dups %>% 
   rename(TREATMENT_NAME = Burn_Unit) %>% 
   st_drop_geometry() %>% 
   select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
   
 ```
 
+#### Merge
 ```{r}
 merged <- full_join(cm_merge, pfirs_merge)
 nrow(pfirs_merge)+nrow(cm_merge) == nrow(merged)
@@ -316,37 +321,44 @@ merged <- merged %>%
   arrange(TREATMENT_NAME)
 ```
 
-
+#### Save
 ```{r}
 write_excel_csv(merged, file = "excel/CalMapper_PFIRS.xls")
 ```
 
-# Spatial version
+## Method 2: Retain information from both
+
 ```{r}
-cm_merge <- cm %>% 
-  rename(Agency = Agency_cm,
-         Acres_Burned = acres_cm,
-         Year = Year_cm,
-         TREATMENT_ID = ID_CM_Trt,
-         ACTIVITY_START = ACTIVITY_START_cm,
-         ACTIVITY_END = ACTIVITY_END_cm,
-         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
-  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
-  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86))
+#colors = list("red", "blue", "yellow")
+mapview(pfirs, zcol = "Year",  alpha.regions = 0.3)+
+  mapview(cm, zcol = "Year_cm",   alpha.regions = 0.3)+
+  #mapview(pfirs_buff, zcol = "Year_pfirs", alpha.regions = 0.3)+
+  mapview(dups, col.regions = "green", alpha.regions = 0.3)+
+  mapview(dups_point, col.regions = "green", alpha.regions = 0.3)
 ```
+
+## Look at an example where two rows of `dups` have the same PFIRS ID
+```{r}
+dups %>% 
+  filter(duplicated(ID_PFIRS_CT)) %>% 
+  arrange(ID_PFIRS_CT) 
+```
+
+
+
+## Create dupID
+```{r}
+dups <- dups %>% 
+  mutate(dupID = seq(1, nrow(dups)))
+```
+
+
+### Create `duplicates` column
+
 
 ```{r}
 pfirs_merge <- pfirs %>% 
-  rename(TREATMENT_NAME = Burn_Unit) %>% 
-  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
-  
-```
-
-```{r}
-merged_spatial <- st_join(cm_merge, pfirs_merge)
-```
-
-```{r}
-mapview(merged_spatial)
+  rename(ID_PFIRS_CT = ID_CT)
+  mutate(dup = )
 ```
 
