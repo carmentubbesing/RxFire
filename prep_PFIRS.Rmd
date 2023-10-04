@@ -96,7 +96,7 @@ xy %>%
 nrow_old <- nrow(xy)
 xy <- xy %>% 
   distinct(Burn_Date, Burn_Unit, Acres_Burned, .keep_all = T)
-deleted_n <- nrow(xy)-nrow_old
+deleted_n <- nrow_old - nrow(xy)
 print(paste("Deleted", deleted_n, "duplicated rows"))
 ```
 
@@ -104,18 +104,24 @@ print(paste("Deleted", deleted_n, "duplicated rows"))
 
 ## Make spatial
 ```{r}
-sf <- st_as_sf(xy, coords = c("Longitude", "Latitude"), crs = 4326)
+sf <- st_as_sf(xy, coords = c("Longitude", "Latitude"), crs = 4326, remove = F)
 ```
+
+```{r}
+mapview(sf)
+```
+
 
 ### Export to shapefile
 ```{r, warning=F}
-layer_name = paste0("PFIRS_", min_year, "-", max_year, "_pulled", pulled_year)
+layer_name = paste0("PFIRS_", min_year, "-", max_year, "_pull", pulled_year)
 st_write(sf, "shapefiles", layer_name, driver = "ESRI Shapefile", delete_layer = T)
 ```
 
 ### Save as Rdata
 ```{r}
-save(sf, file = paste0("Rdata/", layer_name, ".Rdata"))
+pfirs <- sf
+save(pfirs, file = paste0("Rdata/", layer_name, ".Rdata"))
 ```
 
 
@@ -155,7 +161,7 @@ mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red
 
 #### Save as Rdata
 ```{r}
-layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pulled", pulled_year, "_noNF.Rdata" )
+layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
 save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pulled2023_noNF.Rdata")
 ```
 
@@ -169,15 +175,22 @@ xy_year <- xy %>%
 xy_year %>% head()
 ```
 
-# Make spatial
+## Make spatial
 ```{r}
 sf_year <- st_as_sf(xy_year, coords = c("Longitude", "Latitude"), crs = 4326)
 ```
 
 ## Export to shapefile
-```{r}
-layer = paste0("Rdata/PFIRS_", filter_year, "_pulled", pulled_year, ".Rdata" )
+```{r, warning = F}
+layer_name = paste0("PFIRS_", filter_year, "_pull", pulled_year)
 st_write(sf_year, dsn = "shapefiles", layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
 ```
+
+## Write to .Rdata
+```{r}
+file = paste0("Rdata/PFIRS_", filter_year, "_pull", pulled_year, ".Rdata" )
+save(sf_year, file = layer)
+```
+
 
 
