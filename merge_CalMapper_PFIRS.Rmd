@@ -1,0 +1,297 @@
+---
+title: "merge_CalMapper_PFIRS"
+output: 
+  html_document:
+    toc: TRUE
+date: "2023-09-29"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+require(mapview)
+require(leafem)
+```
+
+This script creates a merged list of treatments from both CalMapper and PFIRS with:
+    -  duplicates removed from PFIRS, defined as within 1 km and 30 days from CalMapper record
+    -  years 2020-2022
+    -  filtered to AEPP threshold
+    -  buffered overlay method to account for PFIRS being point data
+
+# Load data
+
+```{r}
+file = "Rdata/CalMapper_activities_fire.Rdata"
+load(file)
+```
+
+```{r}
+file = "Rdata/PFIRS_2017-2022_pulled2023.Rdata"
+load(file)
+```
+
+# Filter by year
+
+## Check whether YEAR matches activity dates in CalMapper
+```{r}
+cm %>% 
+  group_by(YEAR) %>% 
+  ggplot(aes(x = as.factor(YEAR), y = ACTIVITY_START))+
+  geom_point(position = position_jitter())
+```
+
+```{r}
+cm %>% 
+  group_by(YEAR) %>% 
+  ggplot(aes(x = as.factor(YEAR), y = ACTIVITY_END))+
+  geom_point(position = position_jitter())
+```
+
+Yup, it doesn't look like there are 
+
+## CalMapper
+```{r}
+cm <- cm %>% 
+  filter(YEAR %in% seq(2020, 2022))
+```
+
+## PFIRS
+
+```{r}
+pfirs %>% 
+  group_by(Year) %>% 
+  ggplot(aes(x = as.factor(Year), y = Burn_Date))+
+  geom_point(position = position_jitter())
+```
+
+```{r}
+pfirs <- pfirs %>% 
+  filter(Year %in% seq(2020, 2022))
+```
+
+
+# Filter by size
+
+## CalMapper
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  group_by(ACTIVITY_DESCRIPTION) %>% 
+  count()
+```
+
+```{r}
+nrow_old <- nrow(cm)
+
+cm <- cm %>% 
+  filter((ACTIVITY_DESCRIPTION == "Pile Burning" & TREATED_ACRES >= 25) | (ACTIVITY_DESCRIPTION %in% c("Broadcast Burn", "Cultural Burning") & TREATED_ACRES >= 50))
+
+deleted_n <- nrow_old - nrow(cm)
+print(paste("Deleted", deleted_n, "records below the size threshold"))
+```
+
+## PFIRS
+```{r}
+pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Burn_Type) %>% 
+  count()
+```
+
+### Add a column for "pile" or "broadcast" since the burn type column is messy
+```{r}
+pfirs <- pfirs %>% 
+  mutate(Burn_Type_Simple = case_when(
+    Burn_Type %in% c("Hand Pile", "Hand Piles", "Landing Pile", "Landing Piles", "Machine Pile", "Machine Piles") ~ "Pile", 
+    Burn_Type == "Broadcast" ~ "Broadcast",
+    Burn_Type %in% c("Multiple Fuel Types", "Multiple Fuels", "UNK", "Unknown") ~ "Unknown/Multiple", 
+    TRUE ~ NA
+  ))
+```
+
+```{r}
+pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Burn_Type, Burn_Type_Simple) %>% 
+  count()
+```
+
+```{r}
+nrow_old <- nrow(pfirs)
+
+pfirs <- pfirs %>% 
+  filter((Burn_Type == "Pile" & Acres_Burned >= 25) | (Burn_Type %in% c("Broadcast", "Unknown/Multiple") & Acres_Burned >= 50))
+
+deleted_n <- nrow_old - nrow(pfirs)
+print(paste("Deleted", deleted_n, "records below the size threshold"))
+```
+
+# Sync up crs's
+```{r}
+if(object.size(cm) > object.size(pfirs)){
+  print("CalMapper is more GB than PFIRS")
+}
+```
+
+```{r}
+pfirs <- st_transform(pfirs, st_crs(cm))
+```
+
+
+# Add ID column to PFIRS
+```{r}
+pfirs <- pfirs %>% 
+  mutate(ID_CT = seq(1, nrow(pfirs)))
+```
+
+# Add Data_source column
+```{r}
+pfirs <- pfirs %>% 
+  mutate(Data_source = "PFIRS")
+```
+
+```{r}
+cm <- cm %>% 
+  mutate(Date_source = "CalMapper")
+```
+
+# Plot filtered data together
+
+## Convert year columns to factors
+```{r}
+pfirs$Year <- as.factor(pfirs$Year)
+cm$Year <- as.factor(cm$YEAR)
+cm <- cm %>% 
+  select(-YEAR)
+```
+
+
+## Buffer PFIRS
+
+```{r}
+pfirs_buff <- st_buffer(pfirs, dist = 1000)
+```
+
+```{r}
+st_crs(pfirs) == st_crs(cm)
+
+mapview(pfirs, zcol = "Year", col.regions = colors, alpha.regions = 0.5)+
+  mapview(cm, zcol = "Year", col.regions = colors,  alpha.regions = 0.5)+
+  mapview(pfirs_buff, zcol = "Year", col.regions = colors, alpha.regions = 0.7)
+```
+
+# Find duplicates
+
+## Rename columns with identifier for source
+```{r}
+pfirs_buff <- pfirs_buff %>% 
+  rename(Year_pfirs = Year) %>% 
+  rename(Date_pfirs = Burn_Date) %>% 
+  rename(ID_PFIRS_CT = ID_CT) %>% 
+  rename(acres_pfirs = Acres_Burned) %>% 
+  rename(Agency_pfirs = Agency)
+```
+
+```{r}
+cm <- cm %>% 
+  ungroup %>% 
+  rename(Year_cm = Year) %>% 
+  rename(ACTIVITY_START_cm = ACTIVITY_START) %>% 
+  rename(ACTIVITY_END_cm = ACTIVITY_END) %>% 
+  rename(ID_CM_Trt = TREATMENT_ID) %>% 
+  rename(acres_cm = TREATED_ACRES) %>% 
+  rename(Agency_cm = AGENCY_NAME)
+```
+
+## Spatial overlay
+```{r}
+dups <- st_intersection(pfirs_buff, cm)
+```
+
+## Filter `dups` to only rows where dates are similar between the two data sets
+
+### Filter to same year
+```{r}
+dups <- dups %>% 
+  filter(Year_pfirs == Year_cm)
+```
+
+### Look at date differences
+```{r}
+dups <- dups %>% 
+  mutate(diff_dates_start = difftime(Date_pfirs, ACTIVITY_START_cm, units = "days")) %>% 
+  mutate(diff_dates_end = difftime(Date_pfirs, ACTIVITY_END_cm, units = "days"))
+```
+
+### Map places with far away dates to see if they appear to be the same treatment
+```{r}
+maybe_dups <- dups %>% 
+  filter((diff_dates_start>30 & diff_dates_end>30) | (diff_dates_start< -30 & diff_dates_end< -30)) %>% 
+  select(ID_PFIRS_CT, ID_CM_Trt, Year_pfirs, Year_cm, Date_pfirs, ACTIVITY_START_cm, ACTIVITY_END_cm, acres_pfirs, acres_cm, Agency_pfirs, Agency_cm)
+maybe_dups_point <- pfirs %>% 
+  filter(ID_CT %in% maybe_dups$ID_PFIRS_CT) 
+maybe_dups_point <- maybe_dups_point %>% 
+   mutate(month_day_pfirs = paste(month(maybe_dups_point$Burn_Date), day(maybe_dups_point$Burn_Date), sep = "-")) 
+```
+
+```{r}
+#colors = list("red", "blue", "yellow")
+mapview(pfirs, zcol = "Year",  alpha.regions = 0.3)+
+  mapview(cm, zcol = "Year_cm",   alpha.regions = 0.3)+
+  #mapview(pfirs_buff, zcol = "Year_pfirs", alpha.regions = 0.3)+
+  #mapview(maybe_dups, col.regions = "green",alpha.regions = 0.3)+
+  mapview(maybe_dups_point, col.regions = "green", alpha.regions = 0.3)
+```
+
+```{r}
+st_write(maybe_dups, dsn = "shapefiles", layer = "potential_duplicates_CalMapper_PFIRS", driver = "ESRI Shapefile", delete_layer = T)
+st_write(maybe_dups_point, dsn = "shapefiles", layer = "potential_duplicates_CalMapper_PFIRS_POINT", driver = "ESRI Shapefile", delete_layer = T)
+
+```
+
+# Remove PFIRS points that meet the following criteria:
+    -  within 30 days of CalMapper polygon, AND
+    -  within 1 km of the same polygon
+    
+```{r}
+dups <- dups %>% 
+  filter(abs(diff_dates_start)<30) 
+```
+    
+```{r}
+st_write(dups, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS", driver = "ESRI Shapefile", delete_layer = T)
+
+dups_point <- pfirs %>% 
+  filter(ID_CT %in% dups$ID_PFIRS_CT) 
+
+st_write(dups_point, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS_POINT", driver = "ESRI Shapefile", delete_layer = T)
+```
+
+# Remove duplicates from PFIRS
+```{r}
+pfirs <- pfirs %>% 
+  filter(!ID_CT %in% dups$ID_PFIRS_CT)
+```
+
+# Combine pfirs and CalMapper
+
+## Sync column names
+```{r}
+summary(as.factor(pfirs$Agency))
+summary(as.factor(cm$Agency_cm))
+```
+
+```{r}
+cm_merge <- cm %>% 
+  rename(Agency = Agency_cm,
+         Acres_Burned = acres_cm,
+         Year = Year_cm,
+         TREATMENT_ID = ID_CM_Trt) %>% 
+  select(-UNIT_OF_MEASURE, -PROJECT_STATUS, -QUANTITY, -ACTIVITY_STATUS, -GROUND_DISTURBING)
+```
+
+```{r}
+summary(as.factor(cm$ACTIVITY_STATUS))
+```
+
