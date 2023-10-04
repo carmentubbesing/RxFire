@@ -117,11 +117,13 @@ pfirs %>%
   count()
 ```
 
+
+## Filter to burns within the AERR size thresholds
 ```{r}
 nrow_old <- nrow(pfirs)
 
 pfirs <- pfirs %>% 
-  filter((Burn_Type == "Pile" & Acres_Burned >= 25) | (Burn_Type %in% c("Broadcast", "Unknown/Multiple") & Acres_Burned >= 50))
+  filter((Burn_Type_Simple == "Pile" & Acres_Burned >= 25) | (Burn_Type_Simple %in% c("Broadcast", "Unknown/Multiple") & Acres_Burned >= 50))
 
 deleted_n <- nrow_old - nrow(pfirs)
 print(paste("Deleted", deleted_n, "records below the size threshold"))
@@ -153,7 +155,7 @@ pfirs <- pfirs %>%
 
 ```{r}
 cm <- cm %>% 
-  mutate(Date_source = "CalMapper")
+  mutate(Data_source = "CalMapper")
 ```
 
 # Plot filtered data together
@@ -260,12 +262,12 @@ dups <- dups %>%
 ```
     
 ```{r}
-st_write(dups, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS", driver = "ESRI Shapefile", delete_layer = T)
+#st_write(dups, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS", driver = "ESRI Shapefile", delete_layer = T)
 
 dups_point <- pfirs %>% 
   filter(ID_CT %in% dups$ID_PFIRS_CT) 
 
-st_write(dups_point, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS_POINT", driver = "ESRI Shapefile", delete_layer = T)
+#st_write(dups_point, dsn = "shapefiles", layer = "duplicates_CalMapper_PFIRS_POINT", driver = "ESRI Shapefile", delete_layer = T)
 ```
 
 # Remove duplicates from PFIRS
@@ -278,8 +280,7 @@ pfirs <- pfirs %>%
 
 ## Sync column names
 ```{r}
-summary(as.factor(pfirs$Agency))
-summary(as.factor(cm$Agency_cm))
+names(cm)
 ```
 
 ```{r}
@@ -287,11 +288,65 @@ cm_merge <- cm %>%
   rename(Agency = Agency_cm,
          Acres_Burned = acres_cm,
          Year = Year_cm,
-         TREATMENT_ID = ID_CM_Trt) %>% 
-  select(-UNIT_OF_MEASURE, -PROJECT_STATUS, -QUANTITY, -ACTIVITY_STATUS, -GROUND_DISTURBING)
+         TREATMENT_ID = ID_CM_Trt,
+         ACTIVITY_START = ACTIVITY_START_cm,
+         ACTIVITY_END = ACTIVITY_END_cm,
+         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry()
 ```
 
 ```{r}
-summary(as.factor(cm$ACTIVITY_STATUS))
+pfirs_merge <- pfirs %>% 
+  rename(TREATMENT_NAME = Burn_Unit) %>% 
+  st_drop_geometry() %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
+  
+```
+
+```{r}
+merged <- full_join(cm_merge, pfirs_merge)
+nrow(pfirs_merge)+nrow(cm_merge) == nrow(merged)
+```
+
+```{r}
+merged <- merged %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Burn_Date, Agency, everything()) %>% 
+  arrange(TREATMENT_NAME)
+```
+
+
+```{r}
+write_excel_csv(merged, file = "excel/CalMapper_PFIRS.xls")
+```
+
+# Spatial version
+```{r}
+cm_merge <- cm %>% 
+  rename(Agency = Agency_cm,
+         Acres_Burned = acres_cm,
+         Year = Year_cm,
+         TREATMENT_ID = ID_CM_Trt,
+         ACTIVITY_START = ACTIVITY_START_cm,
+         ACTIVITY_END = ACTIVITY_END_cm,
+         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86))
+```
+
+```{r}
+pfirs_merge <- pfirs %>% 
+  rename(TREATMENT_NAME = Burn_Unit) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
+  
+```
+
+```{r}
+merged_spatial <- st_join(cm_merge, pfirs_merge)
+```
+
+```{r}
+mapview(merged_spatial)
 ```
 
