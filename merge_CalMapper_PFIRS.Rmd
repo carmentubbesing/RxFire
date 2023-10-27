@@ -148,6 +148,49 @@ cm <- cm %>%
   mutate(Data_source = "CalMapper")
 ```
 
+# Find out how often reported acreage is pretty different from GIS acreage
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(TREATED_ACRES > 1.5*gis_acres_treatment) %>% 
+  nrow()
+```
+
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment > 1.5*TREATED_ACRES) %>% 
+  nrow()
+```
+
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment < 1.5*TREATED_ACRES & TREATED_ACRES < 1.5*gis_acres_treatment) %>% 
+  nrow()
+```
+
+## Find a good example of GIS acreage way more than reported acreage
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment > 20*TREATED_ACRES ) %>% 
+  select(AQ_ID, CALMAPPER_ID, gis_acres_treatment, TREATED_ACRES, ACTIVITY_DESCRIPTION)
+```
+
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment > 20*TREATED_ACRES ) %>% 
+  select(AQ_ID, CALMAPPER_ID, gis_acres_treatment, TREATED_ACRES, ACTIVITY_DESCRIPTION) %>% filter(AQ_ID == 264131)
+```
+
+
 # Plot filtered data together
 
 ## Convert year columns to factors
@@ -661,6 +704,23 @@ merged_method3 %>%
   filter(TREATMENT_NAME == "UNIT 7" | CALMAPPER_ID == "2600-2020-VMP-001") %>% 
   select(1:6, Burn_Date)
 ```
+
+### Example 8
+```{r}
+merged_method1 %>% 
+  filter(ID_PFIRS_CT %in% c(39, 42, 44) |AQ_ID %in% c("69460", "69461")) %>% 
+  select(1:6, Burn_Date)
+
+merged_method2 %>% 
+  filter(ID_PFIRS_CT %in% c(39, 42, 44) |AQ_ID %in% c("69460", "69461")) %>% 
+  select(1:6, Burn_Date)
+
+merged_method3 %>% 
+  filter(ID_PFIRS_CT %in% c(39, 42, 44) |AQ_ID %in% c("69460", "69461")) %>% 
+  select(1:6, Burn_Date)
+
+```
+
 
 ### Plot acreage
 ```{r}
