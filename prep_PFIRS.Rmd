@@ -122,6 +122,7 @@ st_write(sf, "shapefiles", layer_name, driver = "ESRI Shapefile", delete_layer =
 ```{r}
 pfirs <- sf
 save(pfirs, file = paste0("Rdata/", layer_name, ".Rdata"))
+remove(layer_name)
 ```
 
 

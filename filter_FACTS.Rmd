@@ -21,7 +21,7 @@ load("C:/Users/ctubbesi/Data_heavy_projects/FACTS/facts_common.Rdata")
 These are all CA FACTS records with completion dates after 01/01/2020
 
 
-### Remove annoying column
+### Re    move annoying column
 ```{r}
 facts <- facts_comm %>% 
   select(-EQUIPMENT_)
