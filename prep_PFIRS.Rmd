@@ -21,6 +21,7 @@ pulled_year <- substr(file, nchar(file)-8, nchar(file)-5)
 filter_year <- 2019
 min_year <-  2017
 max_year <-  2022
+include_NF <- "no"
 ```
 
 ```{r}
@@ -163,7 +164,7 @@ mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red
 #### Save as Rdata
 ```{r}
 layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
-save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pulled2023_noNF.Rdata")
+save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pull2023_noNF.Rdata")
 ```
 
 # Filter to `filter_year`s

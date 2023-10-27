@@ -230,11 +230,25 @@ act_2020 <- act_sf_fire %>%
 ```
 
 ## Mask out federal lands
+
+### Load NF data
 ```{r}
 dsn = paste(ref_path, "/National Forest Boundaries", sep = "")
 NF <- st_read(dsn = dsn, "NF_CA_diss")
 NF <- st_transform(NF, st_crs(act_2020))
 save(NF,  file = "Rdata/NF.Rdata")
+```
+
+### Save
+```{r}
+act_sf_fire_noNF <- act_sf_fire %>% 
+  st_difference(NF)
+```
+
+# Save data from all years, outside NF
+```{r}
+cm <- act_sf_fire_noNF
+save(cm, file = "Rdata/CalMapper_activities_fire_noNF.Rdata")
 ```
 
 ```{r}
