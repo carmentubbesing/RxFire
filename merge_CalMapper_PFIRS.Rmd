@@ -273,16 +273,12 @@ dups <- dups %>%
   mutate(diff_dates_end = difftime(Date_pfirs, ACTIVITY_END_cm, units = "days"))
 ```
 
+
 # Remove PFIRS points that meet the following criteria:
     -  within the CAL FIRE date range
     -  within 1 km of the same polygon
 
 ## Date match
-```{r}
-dups %>% 
-  select(Burn_Unit, Date_pfirs, ACTIVITY_START_cm, ACTIVITY_END_cm)
-```
-
 ```{r}
 dups_daily <- dups %>% 
   filter(Date_pfirs >= ACTIVITY_START_cm & Date_pfirs <= ACTIVITY_END_cm) 
@@ -464,39 +460,113 @@ plot_method2 <- table_method2 %>%
   theme_minimal()+
   ggtitle("Method 2")+
   ylim(c(0,110000))+
-  ylab("")
+  ylab("")+
+    guides(fill = "none")
 plot_method2
 ```
 
 ## Method 3: Method 2 but with a 30-day buffer
 
-### Filter `dups` to only rows where dates are THE SAME between the two data sets
-
-#### Filter to same year
+#### Filter by date
 ```{r}
 dups_monthly <- dups %>% 
-  filter(Year_pfirs == Year_cm)
+  filter((Date_pfirs >= ACTIVITY_START_cm & Date_pfirs <= ACTIVITY_END_cm) | (diff_dates_start>30 & diff_dates_end>30) | (diff_dates_start< -30 & diff_dates_end< -30)) 
 ```
 
-
+#### Create list of CM unique records in `dups_monthly`
 ```{r}
-
-```
-
-
-
-# Look for examples of where a temporal buffer is needed
-```{r}
-dups_daily_new <- dups_daily %>% 
-  filter(Agency_pfirs != "US Forest Service") %>% 
-  select(ID_PFIRS_CT, Burn_Unit, Date_pfirs, ACTIVITY_START_cm, ACTIVITY_END_cm, Agency_pfirs, acres_cm) %>% 
-  filter(Date_pfirs < ACTIVITY_START_cm | Date_pfirs > ACTIVITY_END_cm) 
-dups_daily_new %>% 
-  mutate(acres_cm_GIS = st_area(dups_daily_new)/ 4046.86) %>% 
+cm_dup <- dups_monthly %>% 
   st_drop_geometry() %>% 
-  tail(n=10)
+  select(ID_CM_Trt) %>% 
+  distinct() 
+cm_dup
 ```
 
+For the CalMapper polygons with multiple overlapping PFIRS points, add up the acreage in the PFIRS points. If the total acreage is greater than the treated acreage in CM, then delete the CM polygon. Otherwise, delete the PFIRS points.
+```{r}
+count = 0
+
+cm_merge <- cm %>% 
+  ungroup() %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry()
+
+pfirs_merge <- pfirs %>% ungroup() %>% st_drop_geometry()
+
+for(i in 1:nrow(cm_dup)){
+  cm_ID_i <- cm_dup[i,1] %>% unlist()
+  test <- dups_monthly %>% filter(ID_CM_Trt == cm_ID_i)
+  if(nrow(test)==1){
+    count = count + 1 
+    if(test$acres_cm >= test$acres_pfirs){
+      pfirs_merge <- pfirs_merge %>% 
+        filter(!ID_CT %in% test$ID_PFIRS_CT)
+    } else{
+      cm_merge <- cm_merge %>% 
+        filter(AQ_ID != cm_ID_i)
+      print("deleted CalMapper")
+    }
+  } else if (nrow(test)>1){
+    if(test$acres_cm[1] >= sum(test$acres_pfirs)){
+      pfirs_merge <- pfirs_merge %>% 
+        filter(!ID_CT %in% test$ID_PFIRS_CT)
+      print("deleted multiple PFIRS")
+      print(test$ID_PFIRS_CT)
+    } else{
+      cm_merge <- cm_merge %>% 
+        filter(AQ_ID != cm_ID_i)
+      print("deleted CalMapper")
+    }
+  }
+}
+```
+
+```{r}
+print(paste("Out of all the duplicates,", count, "are 1:1 duplicates, and", nrow(cm_dup)-count, "CalMapper ID's are more complicated"))
+```
+
+```{r}
+print(paste("There were", nrow(cm)-nrow(cm_merge), "rows deleted from CalMapper"))
+print(paste("There were", nrow(pfirs)-nrow(pfirs_merge), "rows deleted from PFIRS"))
+```
+
+### Merge 
+
+```{r}
+cm_merge <- cm_merge %>% 
+  rename(Agency = AGENCY_NAME,
+          Acres_Burned = TREATED_ACRES,
+         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
+  st_drop_geometry()
+```
+
+```{r}
+pfirs_merge <- pfirs_merge %>% 
+  rename(TREATMENT_NAME = Burn_Unit) %>% 
+  st_drop_geometry() %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
+```
+
+```{r}
+merged_method3 <- full_join(cm_merge, pfirs_merge)
+nrow(pfirs_merge)+nrow(cm_merge) == nrow(merged_method3)
+```
+
+### Plot acreage
+```{r}
+table_method3 <- merged_method3 %>% 
+  group_by(Year, Data_source) %>% 
+  summarize(acres = sum(Acres_Burned))
+plot_method3 <- table_method3 %>% 
+  ggplot()+
+  geom_col(aes(x = Year, y = acres, fill = Data_source))+
+  theme_minimal()+
+  ggtitle("Method 3")+
+  ylim(c(0,110000))+
+  ylab("")
+plot_method3
+```
 
 # Plot bar charts side-by-side
 
@@ -507,7 +577,7 @@ dups_daily_new %>%
 table_method0 <- table_method0 %>% 
   select(Year, source, ac) %>% 
   group_by(Year) %>% 
-  mutate(total = sum(ac) %>% round(-3))
+  mutate(total = sum(ac) %>% round(-2))
 table_method0
 ```
 
@@ -515,7 +585,7 @@ table_method0
 ```{r}
 table_method1 <- table_method1 %>% 
   group_by(Year) %>% 
-  mutate(total = sum(acres) %>% round(-3))
+  mutate(total = sum(acres) %>% round(-2))
 table_method1
 ```
 
@@ -523,29 +593,46 @@ table_method1
 ```{r}
 table_method2 <- table_method2 %>% 
   group_by(Year) %>% 
-  mutate(total = sum(acres) %>% round(-3))
+  mutate(total = sum(acres) %>% round(-2))
 table_method2
+```
+
+### Method 3
+```{r}
+table_method3 <- table_method3 %>% 
+  group_by(Year) %>% 
+  mutate(total = sum(acres) %>% round(-2))
+table_method3
 ```
 
 ```{r}
 plot_method0 <- plot_method0+
-  geom_text(data = table_method0, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)
+  geom_text(data = table_method0, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
 ```
 
 ```{r}
 plot_method1 <- plot_method1+
-  geom_text(data = table_method1, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)
+  geom_text(data = table_method1, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
 ```
 
 
 ```{r}
 plot_method2 <- plot_method2+
-  geom_text(data = table_method2, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)
+  geom_text(data = table_method2, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
+```
+
+```{r}
+plot_method3 <- plot_method3+
+  geom_text(data = table_method3, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
 ```
 
 
 ```{r}
-all_plots <- (plot_method0 | plot_method1 | plot_method2)
+all_plots <- (plot_method0 | plot_method1 | plot_method2 | plot_method3)
 all_plots
 ggsave("figures/duplicates_bar_charts.png", width = 12, height = 5, units = c("in"))
 ```
