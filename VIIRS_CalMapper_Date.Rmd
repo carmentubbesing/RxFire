@@ -1,0 +1,62 @@
+---
+title: "VIIRS_CalMapper_Dates"
+output: html_document
+date: "2023-10-30"
+---
+
+```{r}
+require(tidyverse)
+require(readxl)
+```
+
+# Load data
+```{r}
+df <- read.csv("excel/viirs_overlap_calmapper.csv")
+```
+
+# Filter to CalMapper with more than one date 
+```{r}
+nrow_old <- nrow(df)
+df <- df %>% 
+  filter(ACTIVITY_END > ACTIVITY_START)
+print(paste("removed", nrow_old - nrow(df), "rows"))
+```
+
+# Add one to duration columns because burning happens on both start and end dates
+```{r}
+df <- df %>% 
+  mutate(day_from_st = day_from_st + 1) %>% 
+  mutate(n_days = n_days + 1)
+```
+
+```{r}
+df_rank <- df %>% 
+  group_by(AQ_ID) %>% 
+  arrange(n_days) %>% 
+  select(AQ_ID) %>% 
+  distinct(AQ_ID) %>% 
+  ungroup()
+df_rank$rank <-  seq(1, length(unique(df$AQ_ID)))
+```
+
+```{r}
+df <-   left_join(df, df_rank, by = "AQ_ID")
+```
+
+```{r}
+ggplot(df)+
+  geom_segment(aes(x = 0, xend = n_days, y = rank, yend = rank), col = "dark green")+
+  geom_point(aes(x = day_from_st, y = rank), col = "red")+
+  xlab("Days since start of CalMapper record")
+ggsave("figures/VIIRS_CM_dates.png")
+```
+
+```{r}
+df %>% 
+  ggplot()+
+  geom_histogram(aes(x = day_decimal), bins = 60, fill = "#DC3F3E")+
+  xlab("Date of VIIRS detect relative to CalMappers duration")+
+  theme_bw()
+ggsave("figures/VIIRS_CM_dates_histogram.png")
+```
+

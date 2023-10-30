@@ -34,29 +34,38 @@ cm %>%
   mutate(percent = round(n/total, 2)*100)
 ```
 
-## 2-7 days
+## Two days
 ```{r}
 cm %>% 
   st_drop_geometry() %>% 
-  filter(DURATION  > 1 & DURATION < 8) %>% 
+  filter(DURATION == 2) %>% 
   count()%>% 
   mutate(percent = round(n/total, 2)*100)
 ```
 
-## 8 to 30 days
+## 3-7 days
 ```{r}
 cm %>% 
   st_drop_geometry() %>% 
-  filter(DURATION  > 7 & DURATION < 31) %>% 
+  filter(DURATION  > 2 & DURATION < 8) %>% 
   count()%>% 
   mutate(percent = round(n/total, 2)*100)
 ```
 
-## More than 30 days
+## 8 to 31 days
 ```{r}
 cm %>% 
   st_drop_geometry() %>% 
-  filter(DURATION  > 30) %>% 
+  filter(DURATION  > 7 & DURATION < 32) %>% 
+  count()%>% 
+  mutate(percent = round(n/total, 2)*100)
+```
+
+## More than 31 days
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  filter(DURATION  > 31) %>% 
   count() %>% 
   mutate(percent = round(n/total, 2)*100)
 ```

@@ -372,35 +372,45 @@ display: none;
 <pre><code>##      n percent
 ## 1 1019      43</code></pre>
 </div>
+<div id="two-days" class="section level2">
+<h2>Two days</h2>
+<pre class="r"><code>cm %&gt;% 
+  st_drop_geometry() %&gt;% 
+  filter(DURATION == 2) %&gt;% 
+  count()%&gt;% 
+  mutate(percent = round(n/total, 2)*100)</code></pre>
+<pre><code>##     n percent
+## 1 217       9</code></pre>
+</div>
 <div id="days" class="section level2">
-<h2>2-7 days</h2>
+<h2>3-7 days</h2>
 <pre class="r"><code>cm %&gt;% 
   st_drop_geometry() %&gt;% 
-  filter(DURATION  &gt; 1 &amp; DURATION &lt; 8) %&gt;% 
+  filter(DURATION  &gt; 2 &amp; DURATION &lt; 8) %&gt;% 
   count()%&gt;% 
   mutate(percent = round(n/total, 2)*100)</code></pre>
 <pre><code>##     n percent
-## 1 470      20</code></pre>
+## 1 253      11</code></pre>
 </div>
-<div id="to-30-days" class="section level2">
-<h2>8 to 30 days</h2>
+<div id="to-31-days" class="section level2">
+<h2>8 to 31 days</h2>
 <pre class="r"><code>cm %&gt;% 
   st_drop_geometry() %&gt;% 
-  filter(DURATION  &gt; 7 &amp; DURATION &lt; 31) %&gt;% 
+  filter(DURATION  &gt; 7 &amp; DURATION &lt; 32) %&gt;% 
   count()%&gt;% 
   mutate(percent = round(n/total, 2)*100)</code></pre>
 <pre><code>##     n percent
-## 1 499      21</code></pre>
+## 1 717      30</code></pre>
 </div>
-<div id="more-than-30-days" class="section level2">
-<h2>More than 30 days</h2>
+<div id="more-than-31-days" class="section level2">
+<h2>More than 31 days</h2>
 <pre class="r"><code>cm %&gt;% 
   st_drop_geometry() %&gt;% 
-  filter(DURATION  &gt; 30) %&gt;% 
+  filter(DURATION  &gt; 31) %&gt;% 
   count() %&gt;% 
   mutate(percent = round(n/total, 2)*100)</code></pre>
 <pre><code>##     n percent
-## 1 369      16</code></pre>
+## 1 151       6</code></pre>
 <pre class="r"><code>cm %&gt;% 
   st_drop_geometry() %&gt;% 
   group_by(DURATION) %&gt;% 
