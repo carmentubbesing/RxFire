@@ -9,9 +9,144 @@ require(tidyverse)
 require(sf)
 ```
 
-# Load data
 
-## FRAP
+
+
+# CalMapper
+```{r}
+load( file = "Rdata/CalMapper_activities_fire_noNF.Rdata")
+```
+
+```{r}
+summary(as.factor(cm$YEAR))
+```
+
+```{r}
+total <- nrow(cm)
+```
+
+## One day
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  filter(DURATION == 1) %>% 
+  count()%>% 
+  mutate(percent = round(n/total, 2)*100)
+```
+
+## 2-7 days
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  filter(DURATION  > 1 & DURATION < 8) %>% 
+  count()%>% 
+  mutate(percent = round(n/total, 2)*100)
+```
+
+## 8 to 30 days
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  filter(DURATION  > 7 & DURATION < 31) %>% 
+  count()%>% 
+  mutate(percent = round(n/total, 2)*100)
+```
+
+## More than 30 days
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  filter(DURATION  > 30) %>% 
+  count() %>% 
+  mutate(percent = round(n/total, 2)*100)
+```
+
+
+
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  group_by(DURATION) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(percent = (n/sum(n)*100 )) %>% 
+  print()
+```
+
+
+
+```{r}
+ggplot(cm)+
+  geom_histogram(aes(log(as.numeric(DURATION))), fill = "#00ba38")+
+  theme_minimal()+
+  xlab("Duration (days)")+
+  scale_x_continuous(breaks = c(0, 2.3, 4.6, 6.9), labels = c("1", "10", "100", "1000"))
+```
+
+
+```{r}
+ggsave("figures/calmapper_duration.png", width = 3, height = 2)
+```
+
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  group_by(DURATION) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(percent = (n/sum(n)*100 )) %>% 
+  arrange(desc(percent)) %>% 
+  print()
+```
+
+
+
+## Define path to Calmapper and to the gdb file
+```{r}
+calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
+calmapper_gdb <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
+if(length(calmapper_gdb) > 1){
+  stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
+}
+
+```
+
+```{r}
+st_layers(calmapper_gdb)
+trt <- st_read(calmapper_gdb, layer = 'CMDash_TreatmentPols')
+```
+
+```{r}
+trt <- trt %>% 
+  mutate(DURATION = PROJECT_END_DATE - PROJECT_START_DATE + 1)
+```
+
+
+```{r}
+ggplot(trt)+
+  geom_histogram(aes(log(as.numeric(DURATION))), fill = "#00ba38")+
+  theme_minimal()+
+  xlab("Duration (days)")+
+  scale_x_continuous(breaks = c(0, 2.3, 4.6, 6.9), labels = c("1", "10", "100", "1,000"))
+```
+
+
+
+```{r}
+ggplot(trt)+
+  geom_histogram(aes(DURATION), fill = "#00ba38")+
+  theme_minimal()+
+  xlab("Duration (days)")+
+  scale_x_continuous(breaks = c(1,10,100,1000), labels = c("1", "10", "100", "1,000"))
+```
+
+
+
+
+
+# FRAP
+
+## Load data
 ```{r}
 file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata", sep = "")
 load(file)
@@ -73,99 +208,3 @@ ggplot(frap)+
 ```{r}
 ggsave("figures/frap_duration.png", width = 3, height = 2)
 ```
-
-
-# CalMapper
-```{r}
-load( file = "Rdata/CalMapper_activities_fire.Rdata")
-cm <- act_sf_fire
-```
-
-```{r}
-summary(as.factor(cm$YEAR))
-```
-
-```{r}
-cm %>% 
-  st_drop_geometry() %>% 
-  filter(DURATION > 1) %>% 
-  count()
-```
-
-```{r}
-cm %>% 
-  st_drop_geometry() %>% 
-  group_by(DURATION) %>% 
-  count() %>% 
-  ungroup() %>% 
-  mutate(percent = (n/sum(n)*100 )) %>% 
-  print()
-```
-
-
-
-```{r}
-ggplot(cm)+
-  geom_histogram(aes(log(as.numeric(DURATION))), fill = "#00ba38")+
-  theme_minimal()+
-  xlab("Duration (days)")+
-  scale_x_continuous(breaks = c(0, 2.3, 4.6, 6.9), labels = c("1", "10", "100", "1000"))
-```
-
-
-```{r}
-ggsave("figures/calmapper_duration.png", width = 3, height = 2)
-```
-
-```{r}
-cm %>% 
-  st_drop_geometry() %>% 
-  group_by(DURATION) %>% 
-  count() %>% 
-  ungroup() %>% 
-  mutate(percent = (n/sum(n)*100 )) %>% 
-  arrange(desc(percent)) %>% 
-  print()
-```
-
-
-
-# Define path to Calmapper and to the gdb file
-```{r}
-calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
-calmapper_gdb <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
-if(length(calmapper_gdb) > 1){
-  stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
-}
-
-```
-
-```{r}
-st_layers(calmapper_gdb)
-trt <- st_read(calmapper_gdb, layer = 'CMDash_TreatmentPols')
-```
-
-```{r}
-trt <- trt %>% 
-  mutate(DURATION = PROJECT_END_DATE - PROJECT_START_DATE + 1)
-```
-
-
-```{r}
-ggplot(trt)+
-  geom_histogram(aes(log(as.numeric(DURATION))), fill = "#00ba38")+
-  theme_minimal()+
-  xlab("Duration (days)")+
-  scale_x_continuous(breaks = c(0, 2.3, 4.6, 6.9), labels = c("1", "10", "100", "1,000"))
-```
-
-
-
-```{r}
-ggplot(trt)+
-  geom_histogram(aes(DURATION), fill = "#00ba38")+
-  theme_minimal()+
-  xlab("Duration (days)")+
-  scale_x_continuous(breaks = c(1,10,100,1000), labels = c("1", "10", "100", "1,000"))
-```
-
