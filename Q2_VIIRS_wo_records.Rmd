@@ -268,6 +268,13 @@ viirs_notwf <- filter(viirs_notwf, likely_wf == F)
 
 ```
 
+
+```{r}
+# just making sure i'm accounting for all the viirs points properly
+nrow(viirs_wf) + nrow(viirs_notwf)
+nrow(viirs)
+```
+
 Identify areas with VIIRS hotspots? Make sure they're outside of
 wildfire perimeters.
 
@@ -327,67 +334,83 @@ viirs_notwf %>%
 
 # responsibility areas, non-ag, camping, power_source, summer detection density 
 viirs_notwf_sm <- viirs_notwf %>% 
-  mutate(across(c(camping, power_source, solar), ~as.numeric(!is.na(.x))), 
-         ag_urban_water = ifelse(non_ag == 0, 1, 0)) %>% 
-  select(date_adj, FRP, CONFIDENCE, TYPE, SRA, county, non_ag, ag_urban_water, camping, power_source, solar, summer_dens, FRAP:anyPolygons, geometry)
+  mutate(across(c(camping, power_source, solar), ~as.numeric(!is.na(.x)))) %>% 
+  select(date_adj, FRP, CONFIDENCE, TYPE, SRA, county, CDL, camping, power_source, solar, summer_dens, FRAP:anyPolygons, geometry)
 # print(viirs_notwf_sm, width = Inf)
 
-viirs_notwf_sm %>% 
-  group_by(anyPolygons) %>% 
-  summarise(n_points = n(),
-            perc_points = 100 * n_points/nrow(.),
-            across(non_ag:solar, ~ sum(.x)), 
-            dens_qlow = quantile(summer_dens, c(.05)),
-            dens_qhi = quantile(summer_dens, c(.95))
-            )
-
-
-# dig into summer density a little more. I'm not sure what a good threshold is
-global_labels <- labeller(
-  anyPolygons = c("FALSE" = "no Rx record", "TRUE" = "Rx fire record"), 
-  power_source = c("0" = "no powerplant", "1" = "yes powerplant"),
-  ag_urban_water = c("0" = "natural", "1" = "ag, urban, or water")
-)
-
-ggplot(viirs_notwf_sm, aes(summer_dens)) +
-  geom_histogram(binwidth = 1) +
-  facet_grid(~anyPolygons, labeller = global_labels)
-ggplot(viirs_notwf_sm, aes(summer_dens)) +
-  geom_histogram(binwidth = 1) +
-  facet_grid(~ag_urban_water, labeller = global_labels)
-# powerplants have more persistent VIIRS points, but still plenty of spots with unexplained hotspots. 
-ggplot(viirs_notwf_sm, aes(summer_dens)) +
-  geom_histogram(binwidth = 1) +
-  facet_grid(~power_source, labeller = global_labels)
- 
-# how about the quality fields taht VIIRS provides?
-viirs_notwf_sm %>% 
-  filter(!is.na(TYPE)) %>% 
-  ggplot(aes(summer_dens)) +
-  geom_histogram(binwidth = 1) +
-  facet_wrap(~TYPE)
-
-# does type line up with powerplants? 
-viirs_notwf_sm %>% 
-  filter(!is.na(TYPE)) %>% 
-  count(TYPE, power_source) %>% 
-  arrange(power_source)
-
-
-# # map it? 
-# mapview(st_as_sf(viirs_notwf_sm, sf_column_name = "geometry"),
-#         zcol = "summer_dens", cex = 2) +
-# mapview(st_as_sf(viirs_notwf_sm, sf_column_name = "geometry"),
-#         zcol = "TYPE", cex = 2) +
-# mapview(vector_layers$powerplants)
-#  
 ```
+
+
+I'd like to know the breakdown of where these VIIRS points fall. how many in wildfire, outside of natural areas, artifactual, rx burns, unaccounted. Using this for the powerpoint about EPA's NEI protocol.
+
+```{r}
+n_wf <- nrow(viirs_wf)
+n_wf/nrow(viirs) # 92
+categories <- viirs_notwf %>% 
+  mutate(May_Dec = date_adj >= date("2020-05-01") & date_adj <= date("2020-12-31")) %>% 
+  mutate(category = case_when(
+    anyPolygons == T ~ 'Rx Fire',
+    CDL == "crop" ~ 'Crop',
+    CDL == "developed" ~ "Developed",
+    !is.na(power_source)|!is.na(solar) ~ 'Developed', 
+    T & May_Dec == T  ~ 'Unaccounted: Wildfire\n(May-Dec)',
+    T  ~ 'Unaccounted: Rx Fire\n(Jan-Apr)'
+  )) %>% 
+  count(category) %>% 
+  add_case(tibble(category = "Wildfire", 'n' = n_wf)) %>% 
+  mutate(perc_all = n/sum(n)*100, 
+         n2 = ifelse(!category %in% c('Wildfire', 'Crop', "Developed"), n, 0),
+         perc_notwfcrop = n2/sum(n2)*100, 
+         n2 = NULL) %>% 
+  mutate(excluded = category %in% c('Wildfire', 'Crop', "Developed"))
+
+# viz breakdown
+library(treemapify)
+library(glue)
+pal <- wesanderson::wes_palette('Darjeeling1', 5)
+plot(1:length(pal), col = pal, pch = 16, cex = 10)
+categories$pal <- pal[c(2, 3, 5, NA, NA, 1)]
+ 
+p1 <- ggplot(categories, aes(area = perc_all, fill= category, label = glue("{category}\n{round(perc_all)}%"), subgroup = excluded)) +
+  geom_treemap(size = 4, color = 'grey100') +
+  geom_treemap_text(colour = "white", place = "centre", grow = F, min.size = 8) +
+  scale_fill_manual(values = categories$pal) + 
+  theme(legend.position = 'none') 
+p1
+
+p2 <- ggplot(categories, aes(area = perc_notwfcrop, fill= category, label = glue("{category}\n{round(perc_notwfcrop)}%"))) +
+  geom_treemap(size = 5, color = 'white') +
+  geom_treemap_text(colour = "white", place = "centre", grow = F, min.size = 8) +
+  scale_fill_manual(values = categories$pal) + 
+  theme(legend.position = 'none')
+p2
+ggsave("tmp_outputs/VIIRS_breakdown_with_wf.png", p1, width = 6, height = 4, units = 'in')
+ggsave("tmp_outputs/VIIRS_breakdown_without_wf.png", p2, width = 6, height = 4, units = 'in')
+
+```
+
+Also check out the 4th of July to demonstrate the viirs picks up false positives. 
+
+```{r}
+dstart <- '2020-06-15'
+dend <- '2020-07-15'
+viirs_ex %>% 
+  filter(date_adj >= dstart & date_adj <= dend,
+         CDL != "nonag_veg"
+         #CDL == 'developed'
+         ) %>% 
+  ggplot(aes(date_adj)) +
+  geom_bar()
+  
+```
+
 
 Lets remove points that coincide with possible false positive sources. Now map it and explore.
 
 ```{r}
 # remove ag/urban/water, solar, power plants, summer dens > 4. 
 #print(viirs_notwf, width = Inf)
+
 
 # points
 viirs_notwf_f <- viirs_notwf %>% 
@@ -399,8 +422,10 @@ count(viirs_notwf_f, CONFIDENCE, anyPolygons)
 viirs_notwf_f <- filter(viirs_notwf_f, CONFIDENCE != 'l')
 
 mapview_points <-viirs_notwf_f %>% 
+  #filter(SATELLITE == 'N') %>% 
   st_as_sf(sf_column_name = 'geometry') %>% 
-  mapview(zcol = "jday_adj", cex = 2, alpha = "anyPolygons") 
+  select(date_adj, jday_adj, FRP, DAYNIGHT, TYPE) %>% 
+  mapview(zcol = "jday_adj", cex = 3, alpha = "anyPolygons") 
 
 # fires
 pal <- c("#d1495b", "#edae49", "#00798c")
@@ -414,10 +439,11 @@ SRA_raster <- raster(rasts$SRA)
 nonag_raster <- raster(rasts$non_ag)
 
 # map it all!
-mapview(SRA_raster, alpha = .2) +
+mapview_all <- mapview(SRA_raster, alpha = .2) +
   mapview(nonag_raster, alpha = .2, legend = F)+
   mapview_fires + 
   mapview_points
+mapview_all
 
 ```
 
@@ -436,5 +462,24 @@ viirs_notwf_f %>%
   group_by(anyPolygons, SRA) %>% 
   summarise(n = n()) %>% 
   rename(intersects_trts = "anyPolygons")
+```
+
+
+I recently started looking into the Chen 2022 paper and they included model outputs. I'm curious how those line up with these data. 
+
+```{r}
+chen_path <- "C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Chen_paper"
+chen <- file.path(chen_path, "tmp/allfires2020.geojson") %>% st_read
+
+mapview_points_chen <-viirs_notwf %>% 
+  filter(SATELLITE == 'N', TYPE == 0) %>% 
+  st_as_sf(sf_column_name = 'geometry') %>% 
+  select(date_adj, jday_adj, FRP, DAYNIGHT, TYPE) %>% 
+  mapview(zcol = "jday_adj", cex = 3, alpha = "anyPolygons") 
+
+
+mapview_points_chen +
+  mapview_fires +
+  mapview(chen, alpha.region = 0, color = "black", lwd = 2)
 ```
 

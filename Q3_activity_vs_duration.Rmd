@@ -61,6 +61,10 @@ viirs_int <- viirs_t %>%
   ungroup() 
 #print(viirs_int %>% arrange(AQ_ID), width = Inf)
 
+# look at carmen's points...
+viirs_int %>% 
+  filter(AQ_ID == 199715) %>% 
+  pull(datetime) %>% as_date %>% sort
   
 ```
 
@@ -188,6 +192,29 @@ matches_activitylevel %>%
 
 
 ```
+
+
+update: 10/30/23 -- Carmen asked when viirs points generally happen in the context of CM activities. check that out
+
+```{r}
+for_carmen <- viirs_matches %>% 
+  as_tibble() %>% 
+  # filter to only include viirs points that spatially and temporally overlap
+  filter(date_matches_CM == T, overlap_trts == T) %>% 
+  # only keep important columns
+  select(pointID, FRP, datetime, TREATMENT_ID, AQ_ID, burn:broadcast_burn, ACTIVITY_START, ACTIVITY_END) %>% 
+  # get number of days from start, duration
+  mutate(day_from_st = (date(datetime) - date(ACTIVITY_START)),
+         n_days = date(ACTIVITY_END) - date(ACTIVITY_START),
+         day_decimal = as.numeric(day_from_st)/as.numeric(n_days))
+write_csv(for_carmen, "tmp_outputs/viirs_overlap_CM.csv")
+
+
+for_carmen %>% 
+  ggplot(., aes(day_decimal)) + geom_histogram()
+
+```
+
 
 
 Those were just the activities where VIIRS intersecting. how many activities without VIIRS detections? if there were detections (spatial overlap with trt), how many didn't temporally match? Make a pie chart. 

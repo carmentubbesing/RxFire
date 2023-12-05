@@ -101,39 +101,49 @@ cdl_NASS_CA <- f_crop_to_CA(cdl_NASS)
 # create a mask by identifying classes to keep
 levels_table <- levels(cdl_NASS_CA)[[1]]
 # levels_table$Class_Names
-nonAgVeg <- c('Pasture/Grass', 'Forest', "Shrubland", "Barren", "Christmas Trees",
+NWL <- c('Pasture/Grass', 'Forest', "Shrubland", "Barren", "Christmas Trees",
               "Nonag/Undefined", "Deciduous Forest", "Evergreen Forest", "Mixed Forest",
-              "Grassland/Pasture", "Woody Wetlands", "Herbaceous Wetlands"
+              "Grassland/Pasture", "Woody Wetlands", "Herbaceous Wetlands", "Wetlands"
               )
-nonAgVeg_values <- levels_table$value[levels_table$Class_Names %in% nonAgVeg]
+developed <- levels_table$Class_Names[grep("devel", levels_table$Class_Names, ignore.case = T)]
+other <- c("Background", "Clouds/No Data", "Water", "Nonag/Undefined", 
+           "Open Water", "Perennial Ice/Snow", "Barren")
+crop <- levels_table$Class_Names[!levels_table$Class_Names %in% c("", NWL, developed, other)]
 
-# reclassify the raster to be non-ag vs. not
-mat1 <- cbind(nonAgVeg_values, 1)
-cdl_CA_mask <- classify(cdl_NASS_CA, mat1, others = 0)
+# reclassify the raster to these categories
+get_idx <- function(nms, newval){
+  idx <- levels_table$value[levels_table$Class_Names %in% nms]
+  cbind(idx, newval)
+}
+mat1 <- list(NWL, developed, crop, other) %>% 
+  map2(., 1:length(.), get_idx) %>% 
+  do.call("rbind", .)
+
+# reclassify the raster to these categories
+# 1=NWL, 2=developed, 3=crop, 4=other
+cdl_CA_mask <- classify(cdl_NASS_CA, mat1, others = 4)
 plot(cdl_CA_mask)
 
-# reproject to RA's raster. output will be %non-ag area
+
+# reproject to RA's raster. output will be most common class 
 cdl_CA_reproj <- project(x = cdl_CA_mask, # input
         y = RA, # the template
-        method = "average"
+        method = "mode"
         )
+levels(cdl_CA_reproj)[[1]] <- data.frame(
+  value = 1:4, 
+  Class_Names = c("nonag_veg", "developed", "crop", "other"))
+names(cdl_CA_reproj) <- "CDL"
 plot(cdl_CA_reproj)
 
-# export fractional non-ag area
-# writeRaster(cdl_CA_reproj, file.path(ref_path, "NASS/CDL/crop_reprojected.tif"))
 
-# threshold cdl layer so >= 50% is non-ag. 
-mat2 <- matrix(c(-Inf, .5, 0, 
-                 .5, Inf, 1), 
-               nrow = 2,
-               byrow = T)
-nonag_CA <- classify(cdl_CA_reproj, mat2) 
-set.names(nonag_CA, "non_ag")
+# export 
+writeRaster(cdl_CA_reproj, file.path(ref_path, "NASS/CDL/CDL_reclassifed_reprojected.tif"), overwrite = T)
 
 
 # bind together the rasters into a brick
-rasts <- c(RA, nonag_CA)
-
+rasts <- c(RA, cdl_CA_reproj)
+# plot(rasts)
 ```
 
 
@@ -207,7 +217,7 @@ Export the data
 write_rds(vector_layers, 
           file.path('outputs_spatial/vector', 'extract_viirs.rds'))
 writeRaster(rasts, 
-          file.path('outputs_spatial/raster', 'extract_viirs.tif'))
+          file.path('outputs_spatial/raster', 'extract_viirs.tif'), overwrite = T)
 
 ```
 

@@ -2,3 +2,5 @@
 .Rhistory
 .RData
 .Ruserdata
+tmp_outputs
+outputs_spatial
