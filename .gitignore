@@ -5,5 +5,10 @@ UW_pile_code/
 .Rhistory
 .RData
 .Ruserdata
+
 shapefiles/*
 .jpeg
+
+tmp_outputs/
+outputs_spatial
+

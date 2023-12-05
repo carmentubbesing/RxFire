@@ -1,0 +1,485 @@
+---
+title: "Q2_VIIRS_wo_records"
+author: "Lisa Rosenthal"
+date: "2023-09-19"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(fs)
+library(terra)
+library(mapview)
+library(fasterize)
+
+```
+
+### Functions
+
+```{r}
+
+# extract data from vector layers
+extract_polys <- function(polygons, points) {
+  # polygons = vector_layers$solar
+  # points = viirs[1:5000,"point_id"]
+  
+  intersects <- st_intersects(points, polygons, sparse = T)
+  if ( length(unlist(intersects)) == 0)
+    return(warning("No intersections"))
+  else{
+    intersections_list <- map(intersects, unlist)
+    
+    # warning if there's more than 1 polygon intersecting a point
+    if(any(map_vec(intersections_list, length) > 1)){
+      warning("Point(s) overlapped with more than 1 polygon. By default, choosing first one.")}
+    # make sure points with no intersection become NA
+    polygonIDs <- map_vec(intersections_list, 
+                          ~ ifelse(sum(.x) == 0, NA, .x[1]) )
+    newcols <- st_drop_geometry(polygons)[polygonIDs, ]
+    return(as_tibble(newcols))
+  }
+}
+
+# add geometry id
+add_geomID <- function(sf_object){
+  # ensure geometry column is named properly
+  st_geometry(sf_object) <- 'geometry'
+  # add geom id
+  sf_object %>%
+  mutate(geom_id = row_number(), .before = geometry) %>% 
+  group_by(geometry) %>%
+  mutate(geom_id = ifelse(n() > 1, geom_id[1], geom_id)) %>% 
+  ungroup()
+}
+```
+
+## Goal
+
+Create a cleaned up version of VIIRS points consisting of high
+confidence fire points.
+
+Remove points that are - On ag land, urban, water (from NASS CDL) -
+campgrounds - power plants - solar farms
+
+Other layers that could be important - Jurisdictions/Land management
+agency
+
+to rid stationary hotspots, could rasterize the points and calculate the
+density of viirs points during the non-rx fire months. \>4 unique days
+get thrown out? need to mask out wildfire.
+
+## Load CA boundary data
+
+Reminder that I need to redownload VIIRS to completely cover the
+southern part of CA!
+
+```{r}
+# California boundary
+ca_path <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
+CA <- st_read(ca_path) 
+
+# VIIRS fire detects
+viirs_dir <- file.path(ref_path, 'VIIRS/CA_2020')
+viirs_shps <- dir_ls(viirs_dir, recurse = T, glob = '*.shp')
+viirs_shps <- viirs_shps[!grepl("viirs_nonAg", viirs_shps)] # don't want that file
+viirs <- map_df(viirs_shps, st_read) %>% st_transform(st_crs(CA))
+viirs <- viirs[CA,]
+
+# get viirs into PST, not UTC
+viirs <- viirs %>%
+  mutate(
+    # get datetime in PST
+    .before = ACQ_DATE,
+    hour = str_sub(ACQ_TIME, 1, 2),
+    minute = str_sub(ACQ_TIME, 3, 4),
+    time = paste(hour, minute, sep = ':'),
+    datetime = ymd_hm(paste(ACQ_DATE, time)) %>% with_tz('US/Pacific'),
+    date = date(datetime),
+    # detects in the middle of the night (e.g. 3am) should be considered night before
+    date_adj = case_when(DAYNIGHT == 'N' ~ date - 1, T ~ date),
+    jday = yday(date),
+    jday_adj = ifelse(DAYNIGHT == 'N', yday(date_adj), jday),
+  ) %>%
+  select(-c(hour, minute, time, ACQ_DATE, ACQ_TIME)) %>% 
+  mutate(point_id = row_number(), .before = LATITUDE)
+
+
+# vis extent of the two. 
+st_make_grid(st_bbox(CA), n = 1) %>% plot(col = 'maroon4')
+st_make_grid(st_bbox(viirs), n = 1) %>% plot(add = T, col = 'tan')
+plot(st_geometry(CA), add = T)
+
+
+```
+
+## Extract things around the VIIRS points
+
+Import the data to extract with the VIIRS points
+
+```{r}
+
+vector_layers <- read_rds('outputs_spatial/vector/extract_viirs.rds')
+rasts <- rast('outputs_spatial/raster/extract_viirs.tif')
+
+```
+
+Extract data with VIIRS points.
+
+```{r}
+
+# raster data
+extracted_rasters <- terra::extract(x = rasts, viirs)
+
+
+
+# vector data
+vector_names <- list(c("county"),
+                     c("camping"),
+                     c("power_source", 'power_capacity'),
+                     c("solar"))
+tictoc::tic()
+extracted_vectors <- map(vector_layers, ~ extract_polys(.x, viirs)) %>% 
+  map2(., vector_names, ~ set_names(.x, .y)) %>% 
+  bind_cols
+tictoc::toc() # 26.6sec
+
+
+# Check out how often viirs intersects with these things...
+# not much. The points (e.g. camping) probably underesimated, but oh well. 
+apply(extracted_vectors, 2, function(x) 100 * mean(!is.na(x)))
+
+viirs_ex <- tibble(viirs, extracted_rasters, extracted_vectors)
+
+
+```
+
+## Fire data
+
+I combined fire data in the script `prep_fire_polygons.Rmd`. It combines
+FRAP (rx and wildfire), CalMAPPER, and FACTS. Also extract fire data,
+similar to above.
+
+Originally I wanted information about all polygons, even those that were
+overlapping each other, but I needed to create a loop that took forever.
+So, still extracting information on the first intersecting polygon.
+
+```{r}
+fires <- read_rds(here::here('outputs_spatial/vector/fire_records_2020.rds'))
+
+# assign a polygon ID to each polygon. Seems like the datasets don't always have a unique ID for each row. 
+fires <- map(fires, add_geomID)
+
+# choose the columns to be extracted from each layer
+cols_to_keep <- list(
+  frap_rx = c("geom_id", "TREATMENT_ID", "TREATMENT_NAME", "AGENCY", "START_DATE", "END_DATE", 'TREATED_AC'),
+  frap_wf = c("geom_id", "INC_NUM", "FIRE_NAME", "AGENCY", "ALARM_DATE", "CONT_DATE"),
+  CalMAPPER = c("geom_id", "TREATMENT_ID", "AQ_ID", 'pile_burn', 'broadcast_burn', "ACTIVITY_START", "ACTIVITY_END", "duration"), 
+  FACTS = c("geom_id", "FACTS_ID", "NAME", "ACTIVITY", "DATE_COMPL")
+)
+fires <- map2(fires, cols_to_keep, ~ select(.x, all_of(.y)))
+
+
+# extract fire data. 
+tictoc::tic()
+extracted_fires <- map(fires, ~ extract_polys(.x, viirs))
+tictoc::toc() # 26.6sec
+
+# add prefixes to column names and join.
+prefixes <- c("FRAPrx", "FRAPwf", "CM", "FACTS")
+add_prefix <- function(df, prefix){
+  names(df) <- glue::glue("{prefix}_{names(df)}")
+  return(df)
+}
+extracted_fires <- map2(extracted_fires, prefixes, add_prefix) %>% 
+  bind_cols()
+
+```
+
+Ok, now I've extracted info on fires and things that might affect viirs
+detections. Let's make sure the extractions make sense adn then merge it
+all together.
+
+```{r}
+# same number of rows. good. merge it together. 
+dim(viirs_ex)
+dim(extracted_fires)
+viirs_ex <- tibble(viirs_ex, extracted_fires)
+```
+
+Filter out VIIRS points that spatially AND temporally overlap with
+wildfires for now. Wow, there are still \~49k VIIRS detections.
+
+It looks like there are still points that lay right outside the
+wildfires. Remove those too.
+
+```{r}
+
+# these viirs points spatially and temporally overlap with wildfire. Remove for now. 
+viirs_wf <- viirs_ex %>% 
+  filter(!is.na(FRAPwf_geom_id) &
+           date_adj >= FRAPwf_ALARM_DATE & date_adj <= FRAPwf_CONT_DATE) 
+
+# these should theoretically be from things other than wildfire. 
+viirs_notwf <- viirs_ex %>% 
+  filter(!point_id %in% viirs_wf$point_id) %>% 
+   mutate(FRAP = !is.na(FRAPrx_geom_id),
+            CM = !is.na(CM_geom_id), 
+            FACTS = !is.na(FACTS_geom_id)) %>% 
+  mutate(anyPolygons = if_any(FRAP:FACTS, ~ .x == T))
+nrow(viirs_notwf)
+
+# visualize points. make sure that they were removed from wildfire. Wow, looks like there are still poinst outside the wildfires. take those out. 
+# mapview(vector_layers$counties)
+sierraNevada_co <- c("Alpine", "El Dorado", "Nevada", "Placer", "Sierra", "Yuba", "Amador", "Calaveras", "Tuolumne", "Mariposa", "Madera", "Mono", "Fresno", "Tulare", "Inyo", "Plumas", "Butte") 
+viirs_notwf %>% 
+  filter(county %in% sierraNevada_co) %>% 
+  st_as_sf(sf_column_name = "geometry") %>% 
+  mapview(zcol = "anyPolygons") +
+  mapview(fires$frap_wf)
+
+# buffer wildfire perimeters by 5km and remove those happening during the time of the fire
+wf_buffered <- st_buffer(fires$frap_wf, dist = 10000)
+
+likely_wf_points <- st_intersection(
+  st_as_sf(viirs_notwf, sf_column_name = "geometry"), 
+  wf_buffered) %>% 
+  filter(date_adj >= ALARM_DATE & (date_adj-5) <= CONT_DATE) # made the date window 5 day lenient on the backend since I think FRAP sometimes cuts the end date short
+viirs_notwf <- viirs_notwf %>% 
+  mutate(likely_wf = ifelse(point_id %in% likely_wf_points$point_id, T, F))
+
+# visualize again. looks a bit better
+viirs_notwf %>% 
+  filter(county %in% sierraNevada_co) %>% 
+  st_as_sf(sf_column_name = "geometry") %>% 
+  mapview(zcol = "likely_wf") +
+  mapview(fires$frap_wf)
+
+# append the wf dataset, remove those from no wf dataset
+viirs_wf <- bind_rows(viirs_wf, 
+          viirs_ex %>% 
+  filter(point_id %in% viirs_notwf$point_id[viirs_notwf$likely_wf]))
+viirs_notwf <- filter(viirs_notwf, likely_wf == F)
+
+```
+
+
+```{r}
+# just making sure i'm accounting for all the viirs points properly
+nrow(viirs_wf) + nrow(viirs_notwf)
+nrow(viirs)
+```
+
+Identify areas with VIIRS hotspots? Make sure they're outside of
+wildfire perimeters.
+
+To rid stationary hotspots, could rasterize the points and calculate the
+density of viirs points during the non-rx fire months. \>4 unique days
+get thrown out? It's probably just picking up wildfire, which will get
+masked out anyways.
+
+```{r}
+months_noRxfire <- c(7:9)
+viirs_summer <- viirs_notwf %>% 
+  filter(month(date_adj) %in% months_noRxfire) %>% 
+  st_as_sf(sf_column_name = "geometry")
+viirs_density <- rasterize(viirs_summer, rasts$SRA, fun = 'length')
+
+# map that density raster to the viirs points
+val <- terra::extract(viirs_density, st_as_sf(viirs_notwf, sf_column_name = "geometry"), ID = F)
+val <- replace_na(val[,1], 0) 
+viirs_notwf <- mutate(viirs_notwf, summer_dens = val)
+
+```
+
+## Compare VIIRS points: those in and out of recorded polygons
+
+How many were in wildfires? In the rx fire polygons? how does this vary
+by source? How do these line up with some of the factors that might
+cause false detections?
+
+I peaked at a map of the data and it looks like there are hotspots of
+detections during the summer months. Not sure the optimal threshold, but
+there was a paper that used 4 detections outside the burning months. I
+found hotspots around powerplants, but also some areas not mapped, like
+landfills, quarries, cement factories. Also, it would be nice if the
+data were polygons instaed of points.
+
+Links to additional data:
+
+- [DMR All
+Mines](https://gis.data.ca.gov/datasets/cadoc::dmr-all-mines/explore?location=37.321295%2C-122.099462%2C14.33)
+- [SWIS (Solid Waste Infrastructure
+System)](https://gis.data.ca.gov/datasets/2e8d23425c18401b80f198618e93bffd/explore?location=37.322800%2C-122.085933%2C13.20)
+- [WESTCARB GIS DATA](http://gif.berkeley.edu/westcarb/gis-data/)--might have polygons?? Not sure how this data was made or when. 
+
+```{r}
+# in wildfire
+points_wf <- viirs_wf$point_id
+paste("percentage of points associated with wildfire:", round(length(points_wf) / nrow(viirs) * 100, 2)) # 92%!
+paste("Number of points NOT associated with wildfire:", nrow(viirs_notwf), "out of", nrow(viirs)) # 38149 out of 477303
+
+# For points outside of wildfire, how many in each polygon type? 
+viirs_notwf %>% 
+  pivot_longer(FRAP:anyPolygons) %>% 
+  select(name, value) %>%  
+  group_by(name) %>% 
+  summarise(percentage = round(100 *sum(value)/nrow(viirs_notwf), 2))
+
+
+# responsibility areas, non-ag, camping, power_source, summer detection density 
+viirs_notwf_sm <- viirs_notwf %>% 
+  mutate(across(c(camping, power_source, solar), ~as.numeric(!is.na(.x)))) %>% 
+  select(date_adj, FRP, CONFIDENCE, TYPE, SRA, county, CDL, camping, power_source, solar, summer_dens, FRAP:anyPolygons, geometry)
+# print(viirs_notwf_sm, width = Inf)
+
+```
+
+
+I'd like to know the breakdown of where these VIIRS points fall. how many in wildfire, outside of natural areas, artifactual, rx burns, unaccounted. Using this for the powerpoint about EPA's NEI protocol.
+
+```{r}
+n_wf <- nrow(viirs_wf)
+n_wf/nrow(viirs) # 92
+categories <- viirs_notwf %>% 
+  mutate(May_Dec = date_adj >= date("2020-05-01") & date_adj <= date("2020-12-31")) %>% 
+  mutate(category = case_when(
+    anyPolygons == T ~ 'Rx Fire',
+    CDL == "crop" ~ 'Crop',
+    CDL == "developed" ~ "Developed",
+    !is.na(power_source)|!is.na(solar) ~ 'Developed', 
+    T & May_Dec == T  ~ 'Unaccounted: Wildfire\n(May-Dec)',
+    T  ~ 'Unaccounted: Rx Fire\n(Jan-Apr)'
+  )) %>% 
+  count(category) %>% 
+  add_case(tibble(category = "Wildfire", 'n' = n_wf)) %>% 
+  mutate(perc_all = n/sum(n)*100, 
+         n2 = ifelse(!category %in% c('Wildfire', 'Crop', "Developed"), n, 0),
+         perc_notwfcrop = n2/sum(n2)*100, 
+         n2 = NULL) %>% 
+  mutate(excluded = category %in% c('Wildfire', 'Crop', "Developed"))
+
+# viz breakdown
+library(treemapify)
+library(glue)
+pal <- wesanderson::wes_palette('Darjeeling1', 5)
+plot(1:length(pal), col = pal, pch = 16, cex = 10)
+categories$pal <- pal[c(2, 3, 5, NA, NA, 1)]
+ 
+p1 <- ggplot(categories, aes(area = perc_all, fill= category, label = glue("{category}\n{round(perc_all)}%"), subgroup = excluded)) +
+  geom_treemap(size = 4, color = 'grey100') +
+  geom_treemap_text(colour = "white", place = "centre", grow = F, min.size = 8) +
+  scale_fill_manual(values = categories$pal) + 
+  theme(legend.position = 'none') 
+p1
+
+p2 <- ggplot(categories, aes(area = perc_notwfcrop, fill= category, label = glue("{category}\n{round(perc_notwfcrop)}%"))) +
+  geom_treemap(size = 5, color = 'white') +
+  geom_treemap_text(colour = "white", place = "centre", grow = F, min.size = 8) +
+  scale_fill_manual(values = categories$pal) + 
+  theme(legend.position = 'none')
+p2
+ggsave("tmp_outputs/VIIRS_breakdown_with_wf.png", p1, width = 6, height = 4, units = 'in')
+ggsave("tmp_outputs/VIIRS_breakdown_without_wf.png", p2, width = 6, height = 4, units = 'in')
+
+```
+
+Also check out the 4th of July to demonstrate the viirs picks up false positives. 
+
+```{r}
+dstart <- '2020-06-15'
+dend <- '2020-07-15'
+viirs_ex %>% 
+  filter(date_adj >= dstart & date_adj <= dend,
+         CDL != "nonag_veg"
+         #CDL == 'developed'
+         ) %>% 
+  ggplot(aes(date_adj)) +
+  geom_bar()
+  
+```
+
+
+Lets remove points that coincide with possible false positive sources. Now map it and explore.
+
+```{r}
+# remove ag/urban/water, solar, power plants, summer dens > 4. 
+#print(viirs_notwf, width = Inf)
+
+
+# points
+viirs_notwf_f <- viirs_notwf %>% 
+  filter(non_ag == 1, is.na(camping), is.na(power_source), is.na(solar), 
+         summer_dens < 4) 
+
+# and confidence? yeah sure.
+count(viirs_notwf_f, CONFIDENCE, anyPolygons)
+viirs_notwf_f <- filter(viirs_notwf_f, CONFIDENCE != 'l')
+
+mapview_points <-viirs_notwf_f %>% 
+  #filter(SATELLITE == 'N') %>% 
+  st_as_sf(sf_column_name = 'geometry') %>% 
+  select(date_adj, jday_adj, FRP, DAYNIGHT, TYPE) %>% 
+  mapview(zcol = "jday_adj", cex = 3, alpha = "anyPolygons") 
+
+# fires
+pal <- c("#d1495b", "#edae49", "#00798c")
+mapview_fires <- 
+  mapview(fires$frap_rx, col.regions = pal[1], color = pal[1], legend = F) +
+  mapview(fires$CalMAPPER, col.regions = pal[2], color = pal[2], legend = F) +
+  mapview(fires$facts, col.regions = pal[3], color = pal[3], legend = F) 
+
+# land ownership, ag
+SRA_raster <- raster(rasts$SRA)
+nonag_raster <- raster(rasts$non_ag)
+
+# map it all!
+mapview_all <- mapview(SRA_raster, alpha = .2) +
+  mapview(nonag_raster, alpha = .2, legend = F)+
+  mapview_fires + 
+  mapview_points
+mapview_all
+
+```
+
+How many of these filtered points are within the polygons? And by ownership?
+```{r}
+# points that intersect treatments vs not
+viirs_notwf_f %>% 
+  filter(!is.na(SRA)) %>% 
+  group_by(anyPolygons) %>% 
+  summarise(n = n()) %>% 
+  rename(intersects_trts = "anyPolygons")
+
+# points that intersect treatments vs not AND responsibility areas (state, local, federal)
+viirs_notwf_f %>% 
+  filter(!is.na(SRA)) %>% 
+  group_by(anyPolygons, SRA) %>% 
+  summarise(n = n()) %>% 
+  rename(intersects_trts = "anyPolygons")
+```
+
+
+I recently started looking into the Chen 2022 paper and they included model outputs. I'm curious how those line up with these data. 
+
+```{r}
+chen_path <- "C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Chen_paper"
+chen <- file.path(chen_path, "tmp/allfires2020.geojson") %>% st_read
+
+mapview_points_chen <-viirs_notwf %>% 
+  filter(SATELLITE == 'N', TYPE == 0) %>% 
+  st_as_sf(sf_column_name = 'geometry') %>% 
+  select(date_adj, jday_adj, FRP, DAYNIGHT, TYPE) %>% 
+  mapview(zcol = "jday_adj", cex = 3, alpha = "anyPolygons") 
+
+
+mapview_points_chen +
+  mapview_fires +
+  mapview(chen, alpha.region = 0, color = "black", lwd = 2)
+```
+

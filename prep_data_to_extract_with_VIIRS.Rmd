@@ -1,0 +1,225 @@
+---
+title: "Q2_VIIRS_wo_records"
+author: "Lisa Rosenthal"
+date: "2023-09-19"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(fs)
+library(terra)
+library(mapview)
+library(fasterize)
+
+```
+
+### Functions
+```{r}
+
+# manipulations dont like it when geometries aren't valid. and they don't work with NA validity.
+make_valid <- function(sf_object) {
+  validity <- st_is_valid(sf_object)
+  if (sum(is.na(validity)) > 0) {
+    stop("can't proceed. Contains rows where validity is NA.")
+  } else{
+    if (all(validity)) {
+      return(sf_object)
+    } else{
+      sf_object <- st_make_valid(sf_object)
+      print(glue::glue("there were {sum(validity == F)} not valid geometries"))
+      return(sf_object)
+    }
+  }
+}
+
+# transform to CA crs, select fields you want, make valid
+prep_polys <- function(polygon, columns, points = CA){
+  message("transforming polygons")
+  polygon <- polygon %>% 
+  st_transform(st_crs(points)) %>% 
+  select(all_of(columns))
+  
+  message("making polygons valid")
+  make_valid(polygon)
+}
+
+```
+
+
+## Goal
+
+I want to see where VIIRS points are landing outside of recorded activity. I will want a high quality dataset of VIIRS with as few false positives as possible. 
+
+Gather data that might be important for reducing/explaining false positives. 
+
+For polygon layers that are wall-to-wall, convert them to rasters. For rasters in general, will want to resample at a resolution of 375 m. For categorical values, use the mode (most common pixel) when aggregating. 
+
+Update: I tried doing that in R, but fasterize (the only one that doesn't take forever) can't calculate mode. I then tried doing it in arcpy, but can't figure out the error. So did it manually in ArcPro.
+
+
+## Load CA boundary data
+
+```{r}
+# California boundary
+ca_path <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
+CA <- st_read(ca_path) 
+
+```
+
+## raster data
+
+layers
+- responsibility areas
+- non-ag data (crops + water)
+
+Make sure the resolution is 375. RA should already be that, so convert the crop data to that. 
+
+```{r}
+
+# crop to CA
+f_crop_to_CA <- function(raster){
+  CA_t <- st_transform(CA, crs(raster))
+  raster_CA <- crop(raster, CA_t)
+  return(raster_CA)
+}
+
+# responsibility areas--local, state, federal
+RA <- file.path(ref_path, 'Responsibility areas/California_State_Responsibility_Areas/sra_raster') %>% 
+  rast
+crs(RA) <- "epsg:3857" # not sure why that wasn't assigned in arcpro
+
+# NASS crop layer
+cdl_path <- file.path(ref_path, "NASS/CDL/2020_30m_cdls") %>% dir_ls(glob = '*.tif')
+cdl_NASS <- rast(cdl_path)
+cdl_NASS_CA <- f_crop_to_CA(cdl_NASS)
+
+# create a mask by identifying classes to keep
+levels_table <- levels(cdl_NASS_CA)[[1]]
+# levels_table$Class_Names
+NWL <- c('Pasture/Grass', 'Forest', "Shrubland", "Barren", "Christmas Trees",
+              "Nonag/Undefined", "Deciduous Forest", "Evergreen Forest", "Mixed Forest",
+              "Grassland/Pasture", "Woody Wetlands", "Herbaceous Wetlands", "Wetlands"
+              )
+developed <- levels_table$Class_Names[grep("devel", levels_table$Class_Names, ignore.case = T)]
+other <- c("Background", "Clouds/No Data", "Water", "Nonag/Undefined", 
+           "Open Water", "Perennial Ice/Snow", "Barren")
+crop <- levels_table$Class_Names[!levels_table$Class_Names %in% c("", NWL, developed, other)]
+
+# reclassify the raster to these categories
+get_idx <- function(nms, newval){
+  idx <- levels_table$value[levels_table$Class_Names %in% nms]
+  cbind(idx, newval)
+}
+mat1 <- list(NWL, developed, crop, other) %>% 
+  map2(., 1:length(.), get_idx) %>% 
+  do.call("rbind", .)
+
+# reclassify the raster to these categories
+# 1=NWL, 2=developed, 3=crop, 4=other
+cdl_CA_mask <- classify(cdl_NASS_CA, mat1, others = 4)
+plot(cdl_CA_mask)
+
+
+# reproject to RA's raster. output will be most common class 
+cdl_CA_reproj <- project(x = cdl_CA_mask, # input
+        y = RA, # the template
+        method = "mode"
+        )
+levels(cdl_CA_reproj)[[1]] <- data.frame(
+  value = 1:4, 
+  Class_Names = c("nonag_veg", "developed", "crop", "other"))
+names(cdl_CA_reproj) <- "CDL"
+plot(cdl_CA_reproj)
+
+
+# export 
+writeRaster(cdl_CA_reproj, file.path(ref_path, "NASS/CDL/CDL_reclassifed_reprojected.tif"), overwrite = T)
+
+
+# bind together the rasters into a brick
+rasts <- c(RA, cdl_CA_reproj)
+# plot(rasts)
+```
+
+
+
+## Vector based layers
+
+Layers you might want are...
+- counties (polygons)
+- campgrounds (points)
+- power plants (points)
+- solar farms (polygons)
+
+Make sure the data is valid and buffer by the VIIRS resolution divided by 2. Put into a list and export. 
+
+```{r}
+# load data, make sure it's valid and same crs as viirs, buffer by 375/2
+radius <- 375/2
+
+# counties
+counties <- file.path(ref_path, "Counties") %>% 
+  dir_ls(recurse = T, glob = "*.shp") %>% 
+  st_read
+counties_valid <- prep_polys(counties, c("NAME"))
+
+# campgrounds
+camping_FS <- file.path(ref_path, 'camping/USFS') %>% 
+  dir_ls(recurse = T, glob = '*shp') %>% 
+  st_read %>% 
+  st_transform(st_crs(CA))
+camping_CA <- file.path(ref_path, 'camping/CA_state_parks') %>% 
+  dir_ls(recurse = T, glob = '*shp') %>% 
+  st_read %>% 
+  st_transform(st_crs(CA))
+camping_FS <- filter(camping_FS, grepl('camp', PARENTACTI, ignore.case = T))
+camping_FSCA <- camping_FS[CA,]
+camping <- bind_rows(
+  transmute(camping_FSCA, camping = 'USFS'),
+  transmute(camping_CA, camping = "CA")
+)
+camping_valid <- prep_polys(camping, 'camping') %>% st_buffer(radius)
+
+# power plants--not sure how to filter these. any power plants have gas flares, even solar.
+# larry hunsinger
+powerplants <- file.path(ref_path, 'powerplants') %>% dir_ls(glob = "*geojson") %>% st_read
+# remove retired plants, make valid
+powerplants_valid <- powerplants %>% 
+  filter(Retired_Plant != 1) %>% 
+  prep_polys(., c('PriEnergySource', 'Capacity_Latest') ) %>% 
+  st_buffer(radius)
+
+# solar plants
+solar <- file.path(ref_path, 'solar')%>% dir_ls(glob = "*geojson") %>% st_read
+solar_valid <- prep_polys(solar, "Combined_Class") %>% 
+  st_buffer(radius)
+
+
+
+# functions to extract data at VIIRS points ============
+vector_layers <- list(counties = counties_valid, 
+     camping = camping_valid,
+     powerplants = powerplants_valid, 
+     solar = solar_valid)
+
+
+```
+
+Export the data
+
+```{r}
+
+write_rds(vector_layers, 
+          file.path('outputs_spatial/vector', 'extract_viirs.rds'))
+writeRaster(rasts, 
+          file.path('outputs_spatial/raster', 'extract_viirs.tif'), overwrite = T)
+
+```
+
+
+
