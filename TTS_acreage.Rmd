@@ -1,0 +1,186 @@
+---
+title: "TTS_acreage"
+output: html_document
+date: "2023-11-16"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+require(fs)
+require(mapview)
+require(writexl)
+```
+
+# Load data
+```{r}
+gdb <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/Treatment Tracking/ITS Fire 20230926.gdb"
+```
+
+```{r}
+st_layers(gdb)
+pts <- st_read(gdb, layer = 'ITS_Fire_Points_20230822')
+pols <- st_read(gdb, layer = 'ITS_Fire_Polygons_20230822')
+```
+
+# Save as tables for Anny
+```{r}
+
+# Assuming you have two data frames: df1 and df2
+# Save df1 as "Sheet1" and df2 as "Sheet2" in the same Excel file
+write_xlsx(list(Sheet1 = df1, Sheet2 = df2), "myfile.xlsx")
+
+write_xlsx(list(Points = pts %>% st_drop_geometry(), Polygons = pols %>% st_drop_geometry()), "excel/ITS_Fire_20230822.xlsx")
+```
+
+# Filter to records that are complete and that are measured in acres
+```{r}
+pts <- pts %>% 
+  filter(ACTIVITY_STATUS == "COMPLETE") %>% 
+  filter(ACTIVITY_UOM == "AC")
+pols <- pols %>% 
+  filter(ACTIVITY_STATUS == "COMPLETE")
+```
+
+# Remove wildfire for resource benefit
+```{r}
+summary(as.factor(pts$ACTIVITY_DESCRIPTION))
+summary(as.factor(pols$ACTIVITY_DESCRIPTION))
+```
+
+```{r}
+pols <- pols %>% 
+  filter(!ACTIVITY_DESCRIPTION %in% c("WM_RESRC_BENEFIT", "PL_TREAT_BURNED"))
+```
+
+# Are there Cal Fire pile burns?
+```{r}
+pols %>% 
+  st_drop_geometry() %>% 
+  group_by(AGENCY, ADMINISTERING_ORG, IMPLEMENTING_ORG, ACTIVITY_DESCRIPTION) %>% 
+  filter(IMPLEMENTING_ORG == "CALFIRE" & ACTIVITY_DESCRIPTION == "PILE_BURN") %>% 
+  View()
+```
+
+
+# How many PFIRS records in pts?
+```{r}
+pts %>% group_by(Source, Year) %>% 
+  count()
+```
+
+# Sum acreage
+```{r}
+pts_acreage <- pts %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(ac_pts = sum(na.omit(ACTIVITY_QUANTITY)))
+pts_acreage
+```
+
+```{r}
+pols_acreage <- pols %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(ac_pols = sum(na.omit(ACTIVITY_QUANTITY)))
+pols_acreage
+```
+
+
+
+```{r}
+tts_ac <- full_join(pts_acreage, pols_acreage)
+tts_ac <- tts_ac %>% 
+  mutate(tts_acres = ac_pts + ac_pols)
+tts_ac
+```
+
+# Save table as Csv
+```{r}
+write.csv(tts_ac, file = "excel/tts_acres_yr.csv", row.names = F)
+```
+
+# Look for USFS data
+```{r}
+pts %>% st_drop_geometry() %>% group_by(Source, PRIMARY_OWNERSHIP_GROUP, ADMINISTERING_ORG, IMPLEMENTING_ORG, IMPLEM_ORG_NAME, ADMIN_ORG_NAME) %>% count() %>% View()
+```
+
+# Look for private industrial timberland data
+```{r}
+pts %>% 
+  st_drop_geometry() %>% 
+  filter(IMPLEMENTING_ORG == "Sierra Pacific Industries") %>% 
+  group_by(PRIMARY_OWNERSHIP_GROUP, ACTIVITY_DESCRIPTION, Year) %>% 
+  summarize(acres = sum(ACTIVITY_QUANTITY))
+```
+
+# Check for records NOT on private industrial timberland bit that were clearly private industrial
+```{r}
+pts %>% 
+  st_drop_geometry() %>% 
+  filter(PRIMARY_OWNERSHIP_GROUP != "PRIVATE_INDUSTRY") %>% 
+  select(IMPLEMENTING_ORG, IMPLEM_ORG_NAME) %>% 
+  distinct() %>% 
+  as.list()
+```
+
+# Create a new column for burns on private industrial land or conducted by SPI
+```{r}
+pts_industrial <- pts %>% 
+  st_drop_geometry() %>% 
+  filter(PRIMARY_OWNERSHIP_GROUP == "PRIVATE_INDUSTRY" | IMPLEMENTING_ORG %in% c("Sierra Pacific Industries", "Michigan-California Timber Company")) %>% 
+  mutate(type = "points")
+
+pts_industrial %>% 
+  group_by(PRIMARY_OWNERSHIP_GROUP, ACTIVITY_DESCRIPTION, Year, Source) %>% 
+  summarize(ac = sum(ACTIVITY_QUANTITY)) %>% 
+  print(n = 33)
+```
+
+```{r}
+pols_industrial <- pols %>% 
+  st_drop_geometry() %>% 
+  filter(PRIMARY_OWNERSHIP_GROUP == "PRIVATE_INDUSTRY" | IMPLEMENTING_ORG %in% c("Sierra Pacific Industries", "Michigan-California Timber Company")) %>% 
+  mutate(type = "polygon")
+
+pols_industrial %>% 
+  group_by(PRIMARY_OWNERSHIP_GROUP, IMPLEMENTING_ORG, ACTIVITY_DESCRIPTION, Year, Source) %>% 
+  summarize(ac = sum(ACTIVITY_QUANTITY)) %>% 
+  print(n = 33)
+```
+
+## Combine industrial polygons and industrial points
+```{r}
+industrial <- full_join(pts_industrial, pols_industrial) %>% 
+    group_by(PRIMARY_OWNERSHIP_GROUP, IMPLEMENTING_ORG, ACTIVITY_DESCRIPTION, Year, Source) %>% 
+  summarize(count = n(), acres = sum(ACTIVITY_QUANTITY)) %>% 
+  select(Source, everything()) %>% 
+  filter(Year != 2023)
+industrial
+```
+
+```{r}
+industrial_summary <- industrial %>% 
+  group_by(Source, Year) %>% 
+  summarize(count = n(), acres = sum(acres))
+industrial_summary
+```
+
+
+# Save them
+```{r}
+write_xlsx(list(full = industrial, summary = industrial_summary), "excel/industrial_timber_acreage.xlsx")
+
+```
+
+# DOE
+```{r}
+pts %>% 
+  st_drop_geometry() %>% 
+  filter(IMPLEMENTING_ORG == "US Department of Energy") %>% 
+  group_by(PRIMARY_OWNERSHIP_GROUP) %>% 
+  select(IMPLEMENTING_ORG, PRIMARY_OWNERSHIP_GROUP, ACTIVITY_QUANTITY, ACTIVITY_UOM, Year) %>% 
+  group_by(Year) %>% 
+  summarize(sum(na.omit(ACTIVITY_QUANTITY)))
+```
+

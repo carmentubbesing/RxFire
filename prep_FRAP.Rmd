@@ -16,10 +16,7 @@ require(mapview)
 
 ### Load
 ```{r}
-frap_dir <- fs::dir_ls(ref_path, recurse = F, glob = '*FRAP*', type = 'directory')
-if(length(frap_dir) > 1){
-  stop( "There's more than one fire22_1 .gdb directory. script assumes only 1.")
-}
+frap_dir <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/FRAP fire perimeters"
 ```
 
 ```{r}
@@ -60,20 +57,29 @@ frap <- frap %>%
 summary(as.factor(frap$treatment_type))
 ```
 
+```{r}
+file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata", sep = "")
+save(frap, file = file)
+```
+
+
 # Mask out federal lands
 ```{r}
 load(file = "Rdata/NF.Rdata")
 ```
 
 ```{r}
-NF <- st_transform(NF, st_crs(frap))
+#NF <- st_transform(NF, st_crs(frap))
 ```
 
+
+
 ```{r}
-frap <- st_difference(frap, NF)
+#frap <- st_difference(frap, NF)
 ```
 
 # Save for statewide analysis
+
 ```{r}
 file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022_noNF.Rdata", sep = "")
 save(frap, file = file)
@@ -121,7 +127,7 @@ save(table, file = "Rdata/frap_2017-2022_areas_diss.Rdata")
 ```
 
 ```{r}
-save(frap_diss_2020, file = "Rdata/frap_2020_dis_Rx.Rdata")
+save(frap_diss_2019, file = "Rdata/frap_2019_dis_Rx.Rdata")
 ```
 
 # Calculate acreage by year
@@ -139,5 +145,6 @@ frap_ac_year
 
 ```{r}
 save(frap_ac_year, file = "Rdata/frap_acres_yr.Rdata")
+write.csv(frap_ac_year, file = "excel/frap_acres_yr.csv", row.names = F)
 ```
 

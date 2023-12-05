@@ -21,6 +21,7 @@ pulled_year <- substr(file, nchar(file)-8, nchar(file)-5)
 filter_year <- 2019
 min_year <-  2017
 max_year <-  2022
+include_NF <- "no"
 ```
 
 ```{r}
@@ -96,7 +97,7 @@ xy %>%
 nrow_old <- nrow(xy)
 xy <- xy %>% 
   distinct(Burn_Date, Burn_Unit, Acres_Burned, .keep_all = T)
-deleted_n <- nrow(xy)-nrow_old
+deleted_n <- nrow_old - nrow(xy)
 print(paste("Deleted", deleted_n, "duplicated rows"))
 ```
 
@@ -104,18 +105,25 @@ print(paste("Deleted", deleted_n, "duplicated rows"))
 
 ## Make spatial
 ```{r}
-sf <- st_as_sf(xy, coords = c("Longitude", "Latitude"), crs = 4326)
+sf <- st_as_sf(xy, coords = c("Longitude", "Latitude"), crs = 4326, remove = F)
 ```
+
+```{r}
+#mapview(sf)
+```
+
 
 ### Export to shapefile
 ```{r, warning=F}
-layer_name = paste0("PFIRS_", min_year, "-", max_year, "_pulled", pulled_year)
+layer_name = paste0("PFIRS_", min_year, "-", max_year, "_pull", pulled_year)
 st_write(sf, "shapefiles", layer_name, driver = "ESRI Shapefile", delete_layer = T)
 ```
 
 ### Save as Rdata
 ```{r}
-save(sf, file = paste0("Rdata/", layer_name, ".Rdata"))
+pfirs <- sf
+save(pfirs, file = paste0("Rdata/", layer_name, ".Rdata"))
+remove(layer_name)
 ```
 
 
@@ -123,7 +131,7 @@ save(sf, file = paste0("Rdata/", layer_name, ".Rdata"))
 
 ## Crop to state of CA
 ```{r}
-CA <- st_read(dsn = paste0(ref_path, "/CA boundary/ca-state-boundary/", layer = "CA_State_TIGER2016.shp"))
+CA <- st_read(dsn = paste0(ref_path, "/CA boundary/ca-state-boundary/", layer = "CA_State_TIGER2016_50_Buffer.shp"))
 CA <- st_transform(CA, st_crs(sf))
 ```
 
@@ -132,9 +140,27 @@ sf <- st_intersection(sf, CA)
 ```
 
 
+
+## Calculate agreage of each, by year
+```{r}
+table <- pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(ac = sum(Acres_Burned)) %>% 
+  mutate(source = "pfirs")
+table
+```
+
 ```{r}
 load(file = "Rdata/NF.Rdata")
 ```
+
+```{r}
+object.size(NF)/100000
+NF <- st_simplify(NF, dTolerance = 10)
+object.size(NF)/100000
+```
+
 
 ```{r}
 NF <- st_transform(NF, st_crs(sf))
@@ -150,14 +176,27 @@ sf_noNF <- st_difference(sf, NF)
 ```
 
 ```{r}
-mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red","blue"))
+#mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red","blue"))
 ```
 
-#### Save as Rdata
+# Add radius that matches the area of the PFIRS burn
 ```{r}
-layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pulled", pulled_year, "_noNF.Rdata" )
-save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pulled2023_noNF.Rdata")
+sf_noNF <- sf_noNF %>% 
+  mutate(buffer_radius = sqrt((4047*Acres_Burned)/pi))
 ```
+
+# Save as Rdata
+```{r}
+layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
+save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pull2023_noNF.Rdata")
+```
+
+# Export to shapefile
+```{r, warning = F}
+layer_name = paste0("PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
+st_write(sf_noNF, dsn = "shapefiles", layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
+```
+
 
 # Filter to `filter_year`s
 ```{r}
@@ -169,15 +208,22 @@ xy_year <- xy %>%
 xy_year %>% head()
 ```
 
-# Make spatial
+## Make spatial
 ```{r}
 sf_year <- st_as_sf(xy_year, coords = c("Longitude", "Latitude"), crs = 4326)
 ```
 
 ## Export to shapefile
-```{r}
-layer = paste0("Rdata/PFIRS_", filter_year, "_pulled", pulled_year, ".Rdata" )
+```{r, warning = F}
+layer_name = paste0("PFIRS_", filter_year, "_pull", pulled_year)
 st_write(sf_year, dsn = "shapefiles", layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
 ```
+
+## Write to .Rdata
+```{r}
+file = paste0("Rdata/PFIRS_", filter_year, "_pull", pulled_year, ".Rdata" )
+save(sf_year, file = layer)
+```
+
 
 
