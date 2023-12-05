@@ -223,13 +223,25 @@ It's safe to use the Activities information and not the Treatment information, a
 st_write(act_sf_fire, dsn = calmapper_gdb, layer = "CalMapper_fire_act", delete_layer = T)
 ```
 
-# Filter and save 2020 to use for Venn Diagram
+# Find GIS acreage of "Upper Little Stony Post Ranch"
+```{r}
+area_m2 <- act_sf_fire %>% 
+  filter(AQ_ID == 267909) %>% 
+  st_area()
+area_ac <- area_m2/4046.86
+area_ac
+```
+
+
+# Save 2020 to use for Venn Diagram
 ```{r}
 act_2020 <- act_sf_fire %>% 
   filter(YEAR == 2020)
 ```
 
-## Mask out federal lands
+
+
+# Mask out federal lands
 
 ### Load NF data
 ```{r}

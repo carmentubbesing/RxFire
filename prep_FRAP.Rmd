@@ -69,13 +69,13 @@ load(file = "Rdata/NF.Rdata")
 ```
 
 ```{r}
-NF <- st_transform(NF, st_crs(frap))
+#NF <- st_transform(NF, st_crs(frap))
 ```
 
 
 
 ```{r}
-frap <- st_difference(frap, NF)
+#frap <- st_difference(frap, NF)
 ```
 
 # Save for statewide analysis
@@ -145,5 +145,6 @@ frap_ac_year
 
 ```{r}
 save(frap_ac_year, file = "Rdata/frap_acres_yr.Rdata")
+write.csv(frap_ac_year, file = "excel/frap_acres_yr.csv", row.names = F)
 ```
 

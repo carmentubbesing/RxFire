@@ -1,0 +1,13 @@
+---
+title: "pfirs_timber"
+output: html_document
+date: "2023-12-01"
+---
+
+# Determine how much acreage in PFIRS comes from private industrial timber companies
+
+# Load data
+```{r}
+load("Rdata/PFIRS_2017-2022_pull2023.Rdata")
+```
+

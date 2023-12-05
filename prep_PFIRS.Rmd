@@ -109,7 +109,7 @@ sf <- st_as_sf(xy, coords = c("Longitude", "Latitude"), crs = 4326, remove = F)
 ```
 
 ```{r}
-mapview(sf)
+#mapview(sf)
 ```
 
 
@@ -131,7 +131,7 @@ remove(layer_name)
 
 ## Crop to state of CA
 ```{r}
-CA <- st_read(dsn = paste0(ref_path, "/CA boundary/ca-state-boundary/", layer = "CA_State_TIGER2016.shp"))
+CA <- st_read(dsn = paste0(ref_path, "/CA boundary/ca-state-boundary/", layer = "CA_State_TIGER2016_50_Buffer.shp"))
 CA <- st_transform(CA, st_crs(sf))
 ```
 
@@ -140,9 +140,27 @@ sf <- st_intersection(sf, CA)
 ```
 
 
+
+## Calculate agreage of each, by year
+```{r}
+table <- pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(ac = sum(Acres_Burned)) %>% 
+  mutate(source = "pfirs")
+table
+```
+
 ```{r}
 load(file = "Rdata/NF.Rdata")
 ```
+
+```{r}
+object.size(NF)/100000
+NF <- st_simplify(NF, dTolerance = 10)
+object.size(NF)/100000
+```
+
 
 ```{r}
 NF <- st_transform(NF, st_crs(sf))
@@ -158,14 +176,27 @@ sf_noNF <- st_difference(sf, NF)
 ```
 
 ```{r}
-mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red","blue"))
+#mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red","blue"))
 ```
 
-#### Save as Rdata
+# Add radius that matches the area of the PFIRS burn
+```{r}
+sf_noNF <- sf_noNF %>% 
+  mutate(buffer_radius = sqrt((4047*Acres_Burned)/pi))
+```
+
+# Save as Rdata
 ```{r}
 layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
 save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pull2023_noNF.Rdata")
 ```
+
+# Export to shapefile
+```{r, warning = F}
+layer_name = paste0("PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
+st_write(sf_noNF, dsn = "shapefiles", layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
+```
+
 
 # Filter to `filter_year`s
 ```{r}

@@ -237,6 +237,15 @@ table <- pfirs %>%
 table
 ```
 
+## Count the records
+```{r}
+pfirs %>% 
+    st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  count()
+```
+
+
 ```{r}
 table_method0 <- cm %>% 
   st_drop_geometry() %>% 
@@ -250,12 +259,13 @@ table_method0
 ## Plot
 ```{r}
 plot_method0 <- ggplot(table_method0 %>% group_by(source))+
-  geom_col(aes(x = Year, y = ac, group = source, fill = source))+
+  geom_col(aes(x = Year, y = ac/1000, group = source, fill = source))+
   ylab("acres")+
   ggtitle("No duplicates removed")+
   theme_minimal()+
   guides(fill = "none")+
-  ylim(c(0,70000))
+  ylim(c(0,140))+
+  xlab("")
 plot_method0
 ```
 
@@ -743,12 +753,82 @@ plot_method3
 
 ### Method 0
 ```{r}
-table_method0 <- table_method0 %>% 
+table_method0_a <- table_method0 %>% 
   select(Year, source, ac) %>% 
   group_by(Year) %>% 
   mutate(total = sum(ac) %>% round(-2))
-table_method0
+table_method0_a
 ```
+
+```{r}
+plot_method0_a <- plot_method0+
+  geom_text(data = table_method0_a, aes(x = Year, y = total/1000, label = paste(comma(total), "acres")), vjust = -0.5)+
+  scale_fill_manual(values = c("#799654", "#1A7EA6"))+
+  xlab("")+
+  ylab("Thousand acres")+
+  ylim(c(0, 140))+
+  theme( axis.text.x = element_text(size = 12))
+plot_method0_a
+```
+
+### Method 1, with added black bar
+```{r}
+add_on <- data.frame(Year = "2020, US EPA", source = "HMS", ac = 79617)
+table_method0_b <- rbind(table_method0, add_on)
+table_method0_b <- table_method0_b %>% 
+  filter(!Year %in% c(2021, 2022) & source != "cm")%>% 
+  ungroup() %>% 
+  mutate(total = sum(ac) %>% round(-2)) %>% 
+  mutate(Year = "2020, US EPA")
+table_method0_b
+```
+
+```{r}
+plot_method0_b <- ggplot(table_method0_b)+
+  geom_col(aes(x = Year, y = ac/1000, fill = source), width = 0.35)+
+  geom_text(data = table_method0_b, aes(x = Year, y = total/1000, label = paste(comma(total), "acres")), vjust = -0.5)+
+  scale_fill_manual(values = c("black", "#1A7EA6"))+
+  ylab("acres")+
+  theme_minimal()+
+  guides(fill = "none")+
+  ylim(c(0, 140))+
+  xlab("")+
+  ylab("")+
+  theme(
+    plot.margin = margin(0, 0, 0, -3, unit = "cm"),  # Adjust the right margin (3 cm in this case)
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 12)
+  )
+plot_method0_b
+```
+
+```{r}
+(plot_method0_a | plot_method0_b)
+ggsave("figures/bar_chart_USEPA.png", width = 8, height = 5.5, units = c("in"))
+```
+
+```{r}
+# Create a basic scatter plot
+data <- data.frame(
+  x = 1:10,
+  y = rnorm(10)
+)
+
+plot <- ggplot(data, aes(x, y)) +
+  geom_point() +
+  labs(title = "Scatter Plot")+
+  ggtitle("original plot")
+plot
+# Adjust the width of the plot using theme() and plot.margin
+plot2 <- plot +
+  theme(
+    plot.margin = margin(-1, 1, 1, 3, unit = "cm")  # Adjust the right margin (3 cm in this case)
+  )+
+  ggtitle("plot with adjusted margins")
+
+(plot | plot2)
+```
+
 
 ### Method 1
 ```{r}
@@ -781,13 +861,6 @@ plot_method0 <- plot_method0+
 ```
 
 ```{r}
-plot_method1 <- plot_method1+
-  geom_text(data = table_method1, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
-  xlab("")
-```
-
-
-```{r}
 plot_method2 <- plot_method2+
   geom_text(data = table_method2, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
   xlab("")
@@ -800,9 +873,8 @@ plot_method3 <- plot_method3+
 ```
 
 ```{r}
-all_plots <- (plot_method0 | plot_method1 | plot_method2 | plot_method3)
+all_plots <- (plot_method0_a | plot_method1 | plot_method2 | plot_method3)
 all_plots
-ggsave("figures/duplicates_bar_charts.png", width = 12, height = 5, units = c("in"))
 ```
 
 # Write duplicates to shapefile

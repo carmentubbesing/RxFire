@@ -1,10 +1,12 @@
 ---
 title: "VIIRS_CalMapper_Dates"
-output: html_document
+output: 
+  html_document:
+    toc: TRUE
 date: "2023-10-30"
 ---
 
-```{r}
+```{r, include = F}
 require(tidyverse)
 require(readxl)
 ```
@@ -60,3 +62,10 @@ df %>%
 ggsave("figures/VIIRS_CM_dates_histogram.png")
 ```
 
+# Find the bar I want to map
+```{r}
+df %>% arrange(desc(n_days)) %>% 
+  head()
+df %>% 
+  filter(AQ_ID == 271821)
+```

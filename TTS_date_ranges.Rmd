@@ -1,0 +1,277 @@
+---
+title: "TTS_date_ranges"
+output: html_document
+date: "2023-11-28"
+---
+
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+require(fs)
+require(mapview)
+```
+
+# Load data
+```{r}
+gdb <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/Treatment Tracking/ITS Fire 20230926.gdb"
+gdb_public <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/Treatment Tracking/ITS_Dashboard_Nov2023.gdb"
+```
+
+```{r}
+st_layers(gdb)
+pts <- st_read(gdb, layer = 'ITS_Fire_Points_20230822')
+pols <- st_read(gdb, layer = 'ITS_Fire_Polygons_20230822')
+```
+
+```{r}
+st_layers(gdb_public)
+pts_public <- st_read(gdb_public, layer = 'ITS_Points_20230822')
+pols_public <- st_read(gdb_public, layer = 'ITS_Polygons_20230822')
+pts_public <- pts_public %>% 
+  filter(activity_cat == "BENEFICIAL_FIRE")
+pols_public <- pols_public %>% 
+  filter(activity_cat == "BENEFICIAL_FIRE")
+
+```
+
+
+# Filter to records that are complete and that are measured in acres
+```{r}
+pts <- pts %>% 
+  filter(ACTIVITY_STATUS == "COMPLETE") %>% 
+  filter(ACTIVITY_UOM == "AC")
+pols <- pols %>% 
+  filter(ACTIVITY_STATUS == "COMPLETE")
+```
+
+# Remove wildfire for resource benefit
+```{r}
+summary(as.factor(pts$ACTIVITY_DESCRIPTION))
+summary(as.factor(pols$ACTIVITY_DESCRIPTION))
+```
+
+```{r}
+pols <- pols %>% 
+  filter(!ACTIVITY_DESCRIPTION %in% c("WM_RESRC_BENEFIT", "PL_TREAT_BURNED"))
+```
+
+
+# Filter out 2023 since it's preliminary
+```{r}
+pts <- pts %>% 
+  filter(Year != 2023)
+pols <- pols %>% 
+  filter(Year != 2023)
+```
+
+# Add DURATION columns
+```{r}
+pts <- pts %>% 
+  mutate(ACTIVITY_START = as.Date(ACTIVITY_START)) %>% 
+  mutate(ACTIVITY_END = as.Date(ACTIVITY_END)) %>% 
+  mutate(DURATION = ACTIVITY_END - ACTIVITY_START+1)
+```
+
+```{r}
+pols <- pols %>% 
+  mutate(ACTIVITY_START = as.Date(ACTIVITY_START)) %>% 
+  mutate(ACTIVITY_END = as.Date(ACTIVITY_END)) %>% 
+  mutate(DURATION = ACTIVITY_END - ACTIVITY_START+1)
+```
+
+## Assign duration=1 if data source is PFIRS
+
+```{r}
+pts %>% 
+  group_by(Source, DURATION) %>% 
+  count()
+```
+
+```{r}
+pts$DURATION[is.na(pts$DURATION)] <- ddays(1)/86400
+```
+
+```{r}
+pts %>% 
+  group_by(Source, DURATION) %>% 
+  count()
+```
+
+```{r}
+pts %>% 
+  select(PROJECTID_USER, AGENCY, ADMINISTERING_ORG, COUNTY, ACTIVID_USER, TRMTID_USER, ACTIVITY_NAME, ACTIVITY_START, ACTIVITY_END, ACTIVITY_QUANTITY, DURATION) %>% 
+  filter(AGENCY == "DOI") %>% 
+  arrange(desc(ACTIVITY_QUANTITY))
+```
+
+# See if public data has the same issues
+```{r}
+pols_public %>% 
+  filter(agency == "DOI") %>% 
+  arrange(desc(activity_quantity))
+```
+
+# Invert duration for DOI records
+```{r}
+pols <- pols %>% 
+  mutate(DURATION = case_when(
+    AGENCY == "DOI" ~ DURATION*(-1),
+    TRUE ~ DURATION
+  ))
+```
+
+# Sum acreage
+```{r}
+pts_acreage <- pts %>% 
+  st_drop_geometry() %>% 
+  group_by(DURATION) %>% 
+  summarize(ac_pts = sum(na.omit(ACTIVITY_QUANTITY)))
+pts_acreage
+```
+
+```{r}
+pols_acreage <- pols %>% 
+  st_drop_geometry() %>% 
+  group_by(DURATION) %>% 
+  summarize(ac_pols = sum(na.omit(ACTIVITY_QUANTITY))) 
+pols_acreage
+```
+
+```{r}
+ac_both <- full_join(pts_acreage, pols_acreage) 
+ac_both$ac_pts[is.na(ac_both$ac_pts)] <- 0
+ac_both$ac_pols[is.na(ac_both$ac_pols)] <- 0
+ac_both <- ac_both %>% 
+  mutate(ac_both = ac_pts + ac_pols) 
+ac_both
+```
+
+## Bin it
+```{r}
+acres_ITS <- ac_both %>%
+  mutate(duration_group = case_when(
+    DURATION == 1 ~ "1 day",
+    DURATION == 2 ~ "2 days",
+    DURATION >= 3 & DURATION <= 7 ~ "3-7 days",
+    DURATION >= 8 & DURATION <= 31 ~ "8-31 days",
+    DURATION > 31 & DURATION <= 180 ~ "32-180 days",
+    DURATION > 180 ~ ">180 days"
+  )) %>%
+  group_by(duration_group) %>%
+  summarise(ac_both = sum(ac_both, na.rm = TRUE))
+acres_ITS <- acres_ITS %>% 
+  mutate(percent = ac_both/sum(ac_both)*100) %>% 
+  t()
+acres_ITS
+```
+
+## Write table
+```{r}
+write.csv(acres_ITS, file = "excel/ITS_duration_ac.csv")
+```
+
+# Count records
+```{r}
+pts_count <- pts %>% 
+  st_drop_geometry() %>% 
+  group_by(DURATION) %>% 
+  count() %>% 
+  rename(n_pts = n)
+pts_count
+```
+
+```{r}
+pols_count <- pols %>% 
+  st_drop_geometry() %>% 
+  group_by(DURATION) %>% 
+  count() %>% 
+  rename(n_pols = n)
+pols_count
+```
+
+```{r}
+n_both <- full_join(pts_count, pols_count) 
+n_both$n_pts[is.na(n_both$n_pts)] <- 0
+n_both$n_pols[is.na(n_both$n_pols)] <- 0
+n_both <- n_both %>% 
+  mutate(n_both = n_pts + n_pols) 
+n_both
+```
+
+## Bin it
+```{r}
+duration_ITS <- n_both %>%
+  mutate(duration_group = case_when(
+    DURATION == 1 ~ "1 day",
+    DURATION == 2 ~ "2 days",
+    DURATION >= 3 & DURATION <= 7 ~ "3-7 days",
+    DURATION >= 8 & DURATION <= 31 ~ "8-31 days",
+    DURATION > 31 & DURATION <= 180 ~ "32-180 days",
+    DURATION > 180 ~ ">180 days"
+  )) %>%
+  group_by(duration_group) %>%
+  summarise(n_both = sum(n_both, na.rm = TRUE))
+duration_ITS <- duration_ITS %>% 
+  mutate(percent = n_both/sum(n_both)*100) %>% 
+  t()
+duration_ITS
+```
+
+## Write table
+```{r}
+write.csv(duration_ITS, file = "excel/ITS_duration_count.csv")
+```
+
+```{r}
+pts_ac_plot <- pts_acreage %>% 
+  rename(ac = ac_pts) %>% 
+  mutate(source = "pts")
+pols_ac_plot <- pols_acreage %>% 
+  rename(ac = ac_pols) %>% 
+  mutate(source = "pols")
+both_ac_plot <- full_join(pts_ac_plot, pols_ac_plot) %>% 
+  filter(!is.na(DURATION))
+both_ac_plot
+```
+
+
+
+
+```{r}
+ggplot(both_ac_plot)+
+  geom_col(aes(y = ac, x = DURATION, fill = source))+
+  theme_minimal()+
+  xlab("Duration (days)")
+  scale_x_continuous(breaks = c(0, 2.3, 4.6, 6.9), labels = c("1", "10", "100", "1000"))
+```
+
+
+# Histogram
+
+## Combine raw tables
+```{r}
+pts_join <- pts %>% 
+  st_drop_geometry() %>% 
+  mutate(source = "Points") 
+pols_join <- pols %>% 
+  st_drop_geometry() %>% 
+  mutate(source = "Polygons")
+both <- full_join(pts_join, pols_join)
+nrow(both)==nrow(pts) + nrow(pols)
+```
+
+```{r}
+ggplot(both)+
+  geom_histogram(aes(x = log(as.numeric(DURATION)), fill = source), position = "dodge", binwidth = 0.3)+
+  theme_minimal()+
+  xlab("Duration (days)")+
+  scale_x_continuous(breaks = c(0, 2.3, 4.6, 6.9), labels = c("1", "10", "100", "1000"))+
+  theme(legend.position = c(.8, .8))
+```
+
+```{r}
+ggsave("figures/TTS_duration.png", width = 5, height = 4)
+```
+
+
