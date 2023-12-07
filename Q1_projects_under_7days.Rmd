@@ -44,6 +44,15 @@ viirs <- read_rds(file.path(ref_path, 'VIIRS/CA_2020/viirs_nonAg.rds'))
 # CalMAPPER data
 CM <- read_rds(file.path(ref_path, 'CalMAPPER/treatment-activities.rds'))
 
+if(ref_path == "C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Local_reference_data"){
+  print("hi it's lisa's computer")
+  CM <- read_rds(file.path(ref_path, 'CalMAPPER/treatment-activities.rds'))
+} else {
+  print("hi it's carmen's computer")
+  load('Rdata/CalMapper_activities_fire_2020.Rdata')
+  CM <- act_2020
+  remove(act_2020)
+}
 ```
 
 ## Prep CalMAPPER data
@@ -81,7 +90,6 @@ Just look at projects from 2020. CalMAPPER is supposed to be complete only FY19/
 Update: Dec 31 1600 PST is the same as Jan 1 0000 UTC. It seems like a default value whenever the start date isn't known. So, remove the 2021 start dates, but 12/31/2019 starts are ok.
 
 ```{r}
-
 # projects spanning 2020 calendar year
 CM_burn %>% 
   filter(year(ACTIVITY_END) > 2020 & year(ACTIVITY_START) == 2020 |
