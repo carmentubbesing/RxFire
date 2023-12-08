@@ -62,10 +62,15 @@ viirs_int <- viirs_t %>%
 #print(viirs_int %>% arrange(AQ_ID), width = Inf)
 
 # look at carmen's points...
-viirs_int %>% 
-  filter(AQ_ID == 199715) %>% 
-  pull(datetime) %>% as_date %>% sort
-  
+library(ggsflabel)
+viirs_tmp <- viirs_int %>% 
+  filter(AQ_ID == 199715) 
+CM_tmp <- CM_burn2020_buffered %>% filter(AQ_ID == 199715)  
+viirs_tmp <- st_intersection(viirs_t, st_make_grid(n = 1, st_bbox(CM_tmp)))
+ggplot() +
+  geom_sf(data = CM_tmp) +
+  geom_sf(data = viirs_tmp, aes(color = pointID %in% c(215326, 215327))) 
+
 ```
 
 

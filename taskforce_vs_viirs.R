@@ -75,8 +75,17 @@ path <- dir_ls(file.path(ref_path, 'task force/Treatment_Tracking_Fire 20230926.
                glob = '*.gdb', recurse = T)
 lyrs <- st_layers(path)
 
-tf_points <- st_read(path, lyrs$name[1])
-tf_polys <- st_read(path, lyrs$name[2])
+tf_points <- st_read(path, lyrs$name[1]) %>% 
+  mutate(tf_id = 1:nrow(.), .before = everything()) %>% 
+  mutate(across(.cols = c(ACTIVITY_END, ACTIVITY_START, PROJECT_START, PROJECT_END,
+                          TREATMENT_START, TREATMENT_END), ~ as.Date(.x)))
+tf_polys <- st_read(path, lyrs$name[2]) %>% 
+  mutate(tf_id = (1:nrow(.)) + max(tf_points$tf_id), 
+         .before = everything()) %>% 
+  mutate(across(.cols = c(ACTIVITY_END, ACTIVITY_START, PROJECT_START, PROJECT_END,
+                          TREATMENT_START, TREATMENT_END), ~ as.Date(.x)))
+# st_drop_geometry(tf_points) %>% write_csv('tmp_outputs/full_tf_points.csv')
+# st_drop_geometry(tf_polys) %>% write_csv('tmp_outputs/full_tf_polygons.csv')
 
 
 # clean it up and only keep Rx fire activity ------------------------------
@@ -90,7 +99,7 @@ tf_polys <- st_read(path, lyrs$name[2])
 
 # columns to keep
 tf_points_clean <- tf_points %>% 
-  select(ACTIVITY_DESCRIPTION, ACTIVITY_CAT, BROAD_VEGETATION_TYPE,
+  select(tf_id, ACTIVITY_DESCRIPTION, ACTIVITY_CAT, BROAD_VEGETATION_TYPE,
          ACTIVITY_STATUS, ACTIVITY_QUANTITY, ACTIVITY_UOM, ACTIVITY_START, ACTIVITY_END, 
          PRIMARY_OWNERSHIP_GROUP, ORG_ADMIN_t, Source) %>% 
   janitor::clean_names() 
@@ -110,7 +119,7 @@ st_geometry(tf_points_clean) <- newshape
 # * polygons ========================================
 # polygons: filter activity_cat == 'BENEFICIAL_FIRE'
 tf_polys_clean <- tf_polys %>% 
-  select(ACTIVITY_DESCRIPTION, ACTIVITY_CAT, BROAD_VEGETATION_TYPE,
+  select(tf_id, ACTIVITY_DESCRIPTION, ACTIVITY_CAT, BROAD_VEGETATION_TYPE,
          ACTIVITY_STATUS, ACTIVITY_QUANTITY, ACTIVITY_UOM, ACTIVITY_START, ACTIVITY_END, 
          PRIMARY_OWNERSHIP_GROUP, ORG_ADMIN_t, Source) %>% 
   janitor::clean_names() %>% 
@@ -161,7 +170,7 @@ viirs <- viirs %>%
   )
 
 # add in an ID column
-viirs$ID <- 1:nrow(viirs)
+viirs$viirs_id <- 1:nrow(viirs)
 
 # check for a spatio-temporal match with TF data. buffer the viirs points, transform.
 tictoc::tic()
@@ -174,19 +183,21 @@ tictoc::toc() # 9 sec
 tf_match <- f_spatiotemporal_match(viirs_nonwf, tf_2021_2022, 
                                    'datetime', 'activity_start', 'activity_end')
 # 35 sec
-tf_match$x_row <- viirs_nonwf$ID[tf_match$x_row]
+tf_match$viirs_id <- viirs_nonwf$viirs_id[tf_match$x_row]
+tf_match$tf_id <- tf_2021_2022$tf_id[tf_match$y_row]
+tf_match$x_row <- NULL
+tf_match$y_row <- NULL
 
 # make a complete data frame again
 # join back with viirs_nonwf
-viirs <- left_join(viirs, 
+viirs <- left_join(viirs %>% select(-viirs_row), 
                   # get one row per viirs point
                   tf_match %>% 
-                    distinct(x_row, match, record_acres) %>% 
-                    group_by(x_row) %>% 
+                    distinct(viirs_id, tf_id, match, record_acres) %>% 
+                    group_by(viirs_id) %>% 
                     arrange(desc(match == "spatiotemporal")) %>%
                     slice(1) %>%
-                    ungroup() %>% 
-                    rename(ID = x_row))
+                    ungroup())
 
 # from VIIRS perspective... -----------------------------------------------
 
@@ -204,10 +215,11 @@ viirs <- viirs %>%
            CDL == "developed" ~ "Developed",
            !is.na(power_source)|!is.na(solar)|!is.na(camping) ~ 'Developed', 
            density > 40 ~ 'Developed',
-           T & month(datetime) >= 5 ~ 'Unaccounted:\nWildfire (May-Dec)',
-           T & month(datetime) < 5 ~ 'Unaccounted:\nRx fire (Jan-Apr)'
+           T & month(datetime) >= 5 ~ 'Unaccounted:\nUS EPA assumed Wildfire (May-Dec)',
+           T & month(datetime) < 5 ~ 'Unaccounted:\nUS EPA assumed Rx fire (Jan-Apr)'
          )) 
-st_write(viirs, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce.geojson'))
+#file_delete(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce.geojson'))
+st_write(viirs, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce.geojson'), delete_dsn = T)
 
 
 viirs_breakdown <- viirs %>% as_tibble() %>%  
@@ -225,8 +237,8 @@ viirs_breakdown <- viirs %>% as_tibble() %>%
 tf_breakdown <- tf_match %>% 
   st_drop_geometry() %>% 
   arrange(desc(match)) %>% 
-  filter(!duplicated(y_row)) %>% 
-  full_join(tf_2021_2022 %>% mutate(y_row = 1:nrow(.))) %>% 
+  filter(!duplicated(tf_id)) %>% 
+  full_join(tf_2021_2022) %>% 
   mutate(match = replace_na(match, 'none'), 
          year = year(activity_end)) %>% 
   filter(activity_status == 'COMPLETE') %>% 
@@ -326,22 +338,10 @@ viirs_tf_unified$p_viirs_poly[2] <- NA
 
 library(VennDiagram)
 
-# Generate 3 sets of 200 words
-set1 <- paste(rep("word_" , 200) , sample(c(1:1000) , 200 , replace=F) , sep="")
-set2 <- paste(rep("word_" , 200) , sample(c(1:1000) , 200 , replace=F) , sep="")
-set3 <- paste(rep("word_" , 200) , sample(c(1:1000) , 200 , replace=F) , sep="")
 
-# Chart
-venn.diagram(
-  x = list(set1, set2, set3),
-  category.names = c("Set 1" , "Set 2 " , "Set 3"),
-  filename = 'venn_diagramm.png',
-  output=TRUE
-)
-
-TF_only <- 246
-VIIRS_only <- 892
-both <- 29
+TF_only <- 234
+VIIRS_only <- 859
+both <- 42
 
 
 TF <- c(paste0(rep('TF', TF_only), 1:TF_only), 
@@ -351,7 +351,7 @@ VIIRS <- c(paste0(rep('VIIRS', VIIRS_only), 1:VIIRS_only),
 venn.diagram(
   x = list(TF, VIIRS),
   category.names = c('TF', 'VIIRS'),
-  filename = '#14_venn_diagramm.png',
+  filename = 'tmp_outputs/venn_diagramm.png',
   output=T, 
   
   # circles customize
