@@ -1,0 +1,270 @@
+---
+title: "CalMAPPER"
+output: 
+  html_document:
+    toc: TRUE
+date: '2022-07-26'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = F}
+require(tidyverse)
+require(lubridate)
+require(sf)
+require(fs)
+require(mapview)
+require(here)
+```
+
+# Description
+
+This script merges CalMAPPER activity data with treatment polygons. This is a necessary step before analyzing prescribed fire data in CalMAPPER. 
+
+# Define path to Calmapper and to the gdb file
+```{r}
+calmapper_dir <- fs::dir_ls(ref_path, recurse = T, glob = '*CalMAPPER', type = 'directory')
+calmapper_gdb <- fs::dir_ls(calmapper_dir, recurse = T, glob = '*.gdb')
+if(length(calmapper_gdb) > 1){
+  stop( "There's more than one CalMAPPER .gdb file. script assumes only 1.")
+}
+
+```
+
+```{r}
+st_layers(calmapper_gdb)
+act <- st_read(calmapper_gdb, layer = 'CMDash_Activities')
+trt <- st_read(calmapper_gdb, layer = 'CMDash_TreatmentPols')
+```
+
+# Clean
+## Remove non-treatment "activities"
+```{r}
+act <- act %>% 
+  filter(!ACTIVITY_DESCRIPTION %in% c("GIS Validation", "Education Outreach", "Project Administration", "Planning Meeting", "Public Contacts", "Water Site Development"))
+```
+
+
+## Look for odd units of measurement
+```{r}
+act %>% 
+  group_by(ACTIVITY_DESCRIPTION, UNIT_OF_MEASURE) %>% 
+  count() %>% 
+  arrange(desc(UNIT_OF_MEASURE)) %>% 
+  print(n=47)
+```
+
+
+## Remove unnecessary columns
+```{r}
+act <- act %>% 
+  select(-UNIT_OF_MEASURE, -PROJECT_STATUS, -QUANTITY, -ACTIVITY_STATUS, -GROUND_DISTURBING, -ThisFiscal, -LastFiscal, -PrevFiscals, -OBJECTID_1, -CFIP_FR, -CONTRACT)
+```
+
+# Merge Rx fire Activity data with treatment polygons
+```{r}
+act_sf <- right_join(trt %>% select(PROJECT_ID, TREATMENT_ID), 
+           act)
+```
+
+# Filter to fire 
+
+## Find relevant treatment names
+```{r}
+act_sf %>% 
+  st_drop_geometry() %>% 
+  group_by(ACTIVITY_DESCRIPTION) %>% 
+  count() %>% 
+  print(n=50)
+```
+
+## Filter by treatment
+```{r}
+act_sf_fire <- 
+  act_sf %>% 
+  filter(ACTIVITY_DESCRIPTION %in% c("Broadcast Burn", "Cultural Burning", "Pile Burning"))
+```
+
+# Clean up dates
+
+## Remove hour information
+```{r}
+test <- act_sf_fire %>% 
+  mutate(ACTIVITY_START_test = as.Date(ACTIVITY_START)) %>% 
+  mutate(ACTIVITY_END_test = as.Date(ACTIVITY_END)) 
+```
+
+### Check
+This should be 2/11 - 2/11. The values that R automatically reads in from ArcGIS are one day off.
+```{r}
+test %>% 
+  filter(AQ_ID == 69461) %>% 
+  select(ACTIVITY_START, ACTIVITY_START_test, ACTIVITY_END, ACTIVITY_END_test)
+```
+
+### Apply to everything
+```{r}
+act_sf_fire <- act_sf_fire %>% 
+  mutate(ACTIVITY_START = as.Date(ACTIVITY_START)) %>% 
+  mutate(ACTIVITY_END = as.Date(ACTIVITY_END)) 
+```
+
+## Create DURATION and YEAR columns
+
+### DURATION
+```{r}
+act_sf_fire <- act_sf_fire %>% 
+  mutate(DURATION = ACTIVITY_END - ACTIVITY_START+1)
+```
+
+### Add YEAR column
+```{r}
+act_sf_fire <- act_sf_fire %>% 
+  mutate(YEAR = year(ACTIVITY_END))
+```
+
+### Check
+```{r}
+act_sf_fire %>% 
+  filter(AQ_ID == 69461) %>% 
+  select(ACTIVITY_START, ACTIVITY_END, DURATION, YEAR) 
+```
+
+# Save data from all years, all places
+```{r}
+cm <- act_sf_fire
+save(cm, file = "Rdata/CalMapper_activities_fire.Rdata")
+```
+
+```{r}
+write.csv(act_sf_fire %>% st_drop_geometry(), file = "~/Reference data/CalMapper/activities_fire.csv", row.names = F)
+write.csv(trt %>% st_drop_geometry(), file = "~/Reference data/CalMapper/treatments_fire.csv", row.names = F)
+```
+
+# Are there Rx fires recorded in Treatments data but not in Activities data or vice versa?
+
+## Create subsets of data for completed broadcast burns
+
+### Activities
+```{r}
+act_broadcast <- act_sf_fire %>% 
+  filter(ACTIVITY_DESCRIPTION == "Broadcast Burn")
+```
+
+### Treatments
+```{r}
+trt %>% 
+  st_drop_geometry() %>% 
+  group_by(TREATMENT_OBJECTIVE) %>% 
+  count()
+```
+
+```{r}
+trt_broadcast_complete <- trt %>% 
+  filter(TREATMENT_OBJECTIVE == "Broadcast Burn") %>% 
+  filter(ACTIVITY_STATUS == "Complete")
+```
+
+## Check if there are treatment IDs in `act_broadcast` that aren't in `trt` 
+```{r}
+check <- act_broadcast %>% 
+  filter(!TREATMENT_ID %in% trt$TREATMENT_ID) %>% 
+  nrow()
+```
+
+```{r}
+check2 <- act_broadcast %>% 
+  filter(!TREATMENT_NAME %in% trt$TREATMENT_NAME) %>% 
+  nrow()
+```
+
+```{r}
+if(check==0 & check2 == 0){
+  paste("There are no TREATMENT_ID values or TREATMENT_NAME values in activities that aren't in trt, at least for broadcast burns")
+} else{
+  print("Alert! There are TREATMENT_ID or TREATMENT_NAME values in activities data that aren't in trt")
+}
+```
+
+
+## Check if there are treatment IDs in completed broadcast treatments that aren't in activities
+
+```{r}
+not_in_act <- trt_broadcast_complete %>% 
+  filter(!TREATMENT_NAME %in% act_broadcast$TREATMENT_NAME) %>% 
+  nrow()
+```
+
+```{r}
+print(paste("Alert! There are", not_in_act, "records in trt_broadcast_complete that aren't in activities. These are potential missing data from the final output!"))
+```
+
+
+### Export those to put in .ppt
+```{r}
+missing_from_activities <- trt_broadcast_complete %>% 
+  filter(!TREATMENT_ID %in% act_broadcast$TREATMENT_ID) %>% 
+  select(CALMAPPER_ID, PROJECT_NAME, TREATMENT_NAME, TREATMENT_OBJECTIVE, PROJECT_STATUS, ACTIVITY_STATUS, PROJECT_START_DATE, PROJECT_END_DATE, TREATMENTAREA_ACRES) 
+missing_from_activities %>% 
+  st_drop_geometry() %>% 
+  summarize(missing_acres = sum(TREATMENTAREA_ACRES))
+write_excel_csv(missing_from_activities %>% st_drop_geometry(), "calmapper_trt_not_act.xls")
+```
+
+### Visualize broadcast treatments with no overlapping activities
+```{r}
+map <- mapview(list(trt_broadcast_complete, act_broadcast, missing_from_activities), col.regions=list("red","blue", "green"),col=list("red","blue", "green"))
+map
+```
+
+It's safe to use the Activities information and not the Treatment information, aside from those 7 missing records.
+
+# Write activities data to gdb
+```{r}
+st_write(act_sf_fire, dsn = calmapper_gdb, layer = "CalMapper_fire_act", delete_layer = T)
+```
+
+# Find GIS acreage of "Upper Little Stony Post Ranch"
+```{r}
+area_m2 <- act_sf_fire %>% 
+  filter(AQ_ID == 267909) %>% 
+  st_area()
+area_ac <- area_m2/4046.86
+area_ac
+```
+
+
+# Save 2020 to use for Venn Diagram
+```{r}
+act_2020 <- act_sf_fire %>% 
+  filter(YEAR == 2020)
+```
+
+# Mask out federal lands
+
+### Load NF data
+```{r}
+load(file = here("Rdata/NF.Rdata"))
+```
+
+### Clip
+```{r}
+act_sf_fire_noNF <- act_sf_fire %>% 
+  st_difference(NF)
+```
+
+# Save data from all years, outside NF
+```{r}
+cm <- act_sf_fire_noNF
+save(cm, file = "Rdata/CalMapper_activities_fire_noNF.Rdata")
+```
+
+```{r}
+act_2020 <- st_difference(act_2020, NF)
+```
+
+## Save
+```{r}
+save(act_2020, file = "Rdata/CalMapper_activities_fire_2020_noNF.Rdata")
+```
+

@@ -1,0 +1,79 @@
+---
+title: "compare_VIIRS_CT_LR"
+output:     
+  html_document:
+    toc: TRUE
+date: "2023-12-07"
+---
+
+```{r, include = F}
+packages <- c("readr", "dplyr", "sf", "ggplot2", "ggsflabel")
+install_packages <- function(packages) {
+  # check if packages are installed
+  installed <- packages %in% rownames(installed.packages())
+  
+  # if not, install them
+  if (any(!installed)) {
+    install.packages(packages[!installed])
+  }
+  
+  # return the packages that were installed
+  packages[!installed]
+}
+lapply(packages, require, character.only = TRUE)
+```
+
+# Load data
+```{r}
+# VIIRS fire detects
+viirs <- read_rds(file.path(ref_path, 'VIIRS/CA_2020/viirs_nonAg.rds'))
+
+# load up CalMAPPER data, created in Q1
+CM_burn2020_buffered <- read_rds(file.path(ref_path, 'CalMAPPER/burnactivities_2020_buffered.rds'))
+```
+
+## Fix dates in CM data
+```{r}
+CM_burn2020_buffered <- CM_burn2020_buffered %>% 
+  mutate(ACTIVITY_START = as.Date(ACTIVITY_START),
+         ACTIVITY_END = as.Date(ACTIVITY_END))
+```
+
+
+
+# get the viirs points contained in the treatment polygons
+```{r}
+viirs_t <- st_transform(viirs, st_crs(CM_burn2020_buffered))
+
+# find those that intersect, do with each activity
+viirs_int <- viirs_t %>%
+  filter(CONFIDENCE != 'l') %>%
+  st_intersection(CM_burn2020_buffered) %>%
+  mutate(rowname = rownames(.),
+         pointID = floor(as.numeric(rowname)),
+         overlap_trts = grepl('\\.', rowname),
+         .before = LATITUDE) %>%
+  group_by(pointID) %>%
+  mutate(overlap_trts = any(overlap_trts == T)) %>%
+  ungroup()
+```
+
+# Save viirs_int to use in `VIIRS_CalMapper_Dates.Rmd`
+```{r}
+saveRDS(viirs_int, file.path(ref_path, 'VIIRS/CA_2020/viirs_int.rds'))
+```
+
+# look at carmen's points...
+```{r}
+viirs_tmp <- viirs_int %>%
+  filter(AQ_ID == 199715)
+viirs_tmp
+```
+
+```{r}
+CM_tmp <- CM_burn2020_buffered %>% filter(AQ_ID == 199715)  
+ggplot() +
+  geom_sf(data = CM_tmp) +
+  geom_sf(data = viirs_tmp, aes(color = pointID %in% c(215326, 215327)))
+```
+

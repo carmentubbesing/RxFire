@@ -1,0 +1,117 @@
+---
+title: "filter FACTS"
+output: 
+  html_document:
+    toc: TRUE
+date: '2022-07-29'
+---
+
+```{r, include = F}
+require(sf)
+require(tidyverse)
+```
+
+## FACTS
+
+### Load
+```{r}
+load("C:/Users/ctubbesi/Data_heavy_projects/FACTS/facts_common.Rdata")
+```
+
+These are all CA FACTS records with completion dates after 01/01/2020
+
+
+### Re    move annoying column
+```{r}
+facts <- facts_comm %>% 
+  select(-EQUIPMENT_)
+```
+
+
+### Filter to anything Rx fire related
+
+This includes pile burns (1130)
+```{r}
+codes <- c(1111, 1112, 1113, 1130, 3340, 4471, 4481, 4491, 4541, 7050, 7015,6101, 2540)
+```
+
+```{r}
+wfu_codes <- c(1115, 1116)
+```
+
+```{r}
+facts_wfu <- facts %>% 
+  filter(ACTIVITY_C %in% wfu_codes)
+```
+
+```{r}
+save(facts_wfu, file = "~/WFU/facts_wfu.Rdata")
+```
+
+
+
+```{r}
+facts <- facts %>%
+  filter(ACTIVITY_C %in% codes)
+```
+
+```{r}
+table <- facts %>% 
+  group_by(ACTIVITY_C, ACTIVITY) %>%
+  st_drop_geometry() %>% 
+  count()
+table
+```
+
+```{r}
+write.csv(table, "Rx_activity_codes.csv")
+```
+
+## transform to 3310
+```{r}
+facts <- st_transform(facts, crs = 3310)
+```
+
+
+## Filter to 2019
+
+```{r}
+facts_19 <- facts %>% 
+  filter(DATE_COMPL >= "2019-01-01" & 
+           DATE_COMPL <= "2019-12-31") 
+```
+
+
+
+# Save
+```{r}
+save(facts_19, file = "Rdata/facts_19_Rx.Rdata")
+```
+
+## Filter to 2020
+
+```{r}
+facts_20 <- facts %>% 
+  filter(DATE_COMPL >= "2020-01-01" & 
+           DATE_COMPL <= "2020-12-31") 
+```
+
+# Save
+```{r}
+save(facts_20, file = "Rdata/facts_20_Rx.Rdata")
+```
+
+
+## Filter to 2019-2020
+
+```{r}
+facts_1920 <- facts %>% 
+  filter(DATE_COMPL >= "2019-01-01" & 
+           DATE_COMPL <= "2020-12-31") 
+```
+
+# Save
+```{r}
+save(facts_1920, file = "Rdata/facts_1920_Rx.Rdata")
+```
+

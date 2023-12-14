@@ -1,0 +1,867 @@
+---
+title: "merge_CalMapper_PFIRS"
+output: 
+  html_document:
+    toc: TRUE
+date: "2023-09-29"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+require(mapview)
+require(leafem)
+require(lubridate)
+require(patchwork)
+require(scales)
+require(here)
+```
+
+This script creates a merged list of treatments from both CalMapper and PFIRS with:
+    -  years 2020-2022
+    -  outside NF land
+    -  filtered to AEPP threshold
+    -  buffered overlay method to account for PFIRS being point data
+
+# Load data
+
+```{r}
+file = here("Rdata/CalMapper_activities_fire.Rdata")
+load(file)
+#mapview(cm)
+```
+
+```{r}
+file = here("Rdata/PFIRS_2017-2022_pull2023.Rdata")
+load(file)
+#mapview(pfirs)
+```
+
+# Filter to years 2020-2022
+
+## CalMapper
+```{r}
+cm <- cm %>% 
+  filter(YEAR %in% seq(2020, 2022))
+```
+
+## PFIRS
+
+```{r}
+pfirs %>% 
+  group_by(Year) %>% 
+  ggplot(aes(x = as.factor(Year), y = Burn_Date))+
+  geom_point(position = position_jitter())
+```
+
+```{r}
+pfirs <- pfirs %>% 
+  filter(Year %in% seq(2020, 2022))
+```
+
+
+# Check activity types
+
+## CalMapper
+```{r}
+cm %>% 
+  st_drop_geometry() %>% 
+  group_by(ACTIVITY_DESCRIPTION) %>% 
+  count()
+```
+
+## PFIRS
+```{r}
+pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Burn_Type) %>% 
+  count()
+```
+
+# In PFIRS, add a column for "pile" or "broadcast" since the burn type column is messy 
+```{r}
+pfirs <- pfirs %>% 
+  mutate(Burn_Type_Simple = case_when(
+    Burn_Type %in% c("Hand Pile", "Hand Piles", "Landing Pile", "Landing Piles", "Machine Pile", "Machine Piles") ~ "Pile", 
+    Burn_Type == "Broadcast" ~ "Broadcast",
+    Burn_Type %in% c("Multiple Fuel Types", "Multiple Fuels", "UNK", "Unknown") ~ "Unknown/Multiple", 
+    TRUE ~ NA
+  ))
+```
+
+```{r}
+pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Burn_Type, Burn_Type_Simple) %>% 
+  count()
+```
+
+<!-- ## Filter to burns within the AERR size thresholds -->
+
+<!-- ### CalMapper -->
+<!-- ```{r} -->
+<!-- nrow_old <- nrow(cm) -->
+
+<!-- cm <- cm %>%  -->
+<!--   filter((ACTIVITY_DESCRIPTION == "Pile Burning" & TREATED_ACRES >= 25) | (ACTIVITY_DESCRIPTION %in% c("Broadcast Burn", "Cultural Burning") & TREATED_ACRES >= 50)) -->
+
+<!-- deleted_n <- nrow_old - nrow(cm) -->
+<!-- print(paste("Deleted", deleted_n, "records below the size threshold")) -->
+<!-- ``` -->
+
+<!-- ### PFIRS -->
+<!-- ```{r} -->
+<!-- nrow_old <- nrow(pfirs) -->
+
+<!-- pfirs <- pfirs %>%  -->
+<!--   filter((Burn_Type_Simple == "Pile" & Acres_Burned >= 25) | (Burn_Type_Simple %in% c("Broadcast", "Unknown/Multiple") & Acres_Burned >= 50)) -->
+
+<!-- deleted_n <- nrow_old - nrow(pfirs) -->
+<!-- print(paste("Deleted", deleted_n, "records below the size threshold")) -->
+<!-- ``` -->
+
+# Sync up crs's
+```{r}
+pfirs <- st_transform(pfirs, st_crs(cm))
+```
+
+# Add ID column to PFIRS
+```{r}
+pfirs <- pfirs %>% 
+  mutate(ID_PFIRS_CT = seq(1, nrow(pfirs)))
+```
+
+# Add Data_source column
+```{r}
+pfirs <- pfirs %>% 
+  mutate(Data_source = "PFIRS")
+```
+
+```{r}
+cm <- cm %>% 
+  mutate(Data_source = "CalMapper")
+```
+
+# Find out how often reported acreage is pretty different from GIS acreage
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(TREATED_ACRES > 1.5*gis_acres_treatment) %>% 
+  nrow()
+```
+
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment > 1.5*TREATED_ACRES) %>% 
+  nrow()
+```
+
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment < 1.5*TREATED_ACRES & TREATED_ACRES < 1.5*gis_acres_treatment) %>% 
+  nrow()
+```
+
+## Find a good example of GIS acreage way more than reported acreage
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment > 20*TREATED_ACRES ) %>% 
+  select(AQ_ID, CALMAPPER_ID, gis_acres_treatment, TREATED_ACRES, ACTIVITY_DESCRIPTION) %>% 
+  head()
+```
+
+```{r}
+cm %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry() %>% 
+  filter(gis_acres_treatment > 20*TREATED_ACRES ) %>% 
+  select(AQ_ID, CALMAPPER_ID, gis_acres_treatment, TREATED_ACRES, ACTIVITY_DESCRIPTION) %>% filter(AQ_ID == 264131) %>% 
+  head()
+```
+
+
+# Plot filtered data together
+
+## Convert year columns to factors
+```{r}
+pfirs$Year <- as.factor(pfirs$Year)
+cm$Year <- as.factor(cm$YEAR)
+cm <- cm %>% 
+  select(-YEAR)
+```
+
+## Buffer PFIRS
+
+```{r}
+pfirs_buff <- st_buffer(pfirs, dist = 1000)
+```
+
+### Write
+```{r}
+st_write(pfirs_buff, dsn = here("shapefiles"), layer = "pfirs_buffer", driver = "ESRI Shapefile", delete_layer = T)
+```
+
+
+### Plot using mapview
+```{r}
+st_crs(pfirs) == st_crs(cm)
+
+# mapview(pfirs, zcol = "Year", col.regions = colors, alpha.regions = 0.5)+
+#   mapview(cm, zcol = "Year", col.regions = colors,  alpha.regions = 0.5)+
+#   mapview(pfirs_buff, zcol = "Year", col.regions = colors, alpha.regions = 0.3)
+```
+
+# Plot without duplicates removed at all
+
+## Calculate agreage of each, by year
+```{r}
+table <- pfirs %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(ac = sum(Acres_Burned)) %>% 
+  mutate(source = "pfirs")
+table
+```
+
+## Count the records
+```{r}
+pfirs %>% 
+    st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  count()
+```
+
+
+```{r}
+table_method0 <- cm %>% 
+  st_drop_geometry() %>% 
+  group_by(Year) %>% 
+  summarize(ac = sum(TREATED_ACRES)) %>% 
+  mutate(source = "cm") %>% 
+  full_join(table)
+table_method0
+```
+
+## Plot
+```{r}
+plot_method0 <- ggplot(table_method0 %>% group_by(source))+
+  geom_col(aes(x = Year, y = ac/1000, group = source, fill = source))+
+  ylab("acres")+
+  ggtitle("No duplicates removed")+
+  theme_minimal()+
+  guides(fill = "none")+
+  ylim(c(0,140))+
+  xlab("")
+plot_method0
+```
+
+
+# Find duplicates
+
+## Rename columns with identifier for source
+```{r}
+pfirs_buff_dups <- pfirs_buff %>% 
+  rename(Year_pfirs = Year) %>% 
+  rename(Date_pfirs = Burn_Date) %>% 
+  rename(acres_pfirs = Acres_Burned) %>% 
+  rename(Agency_pfirs = Agency)
+```
+
+```{r}
+cm_dups <- cm %>% 
+  ungroup %>% 
+  rename(Year_cm = Year) %>% 
+  rename(ACTIVITY_START_cm = ACTIVITY_START) %>% 
+  rename(ACTIVITY_END_cm = ACTIVITY_END) %>% 
+  rename(ID_CM_Trt = AQ_ID) %>% 
+  rename(acres_cm = TREATED_ACRES) %>% 
+  rename(Agency_cm = AGENCY_NAME) %>% 
+  rename()
+```
+
+## Spatial overlay
+```{r}
+dups <- st_intersection(pfirs_buff_dups, cm_dups)
+```
+
+## Filter `dups` to only rows where dates are THE SAME between the two data sets
+
+### Filter to same year
+```{r}
+dups <- dups %>% 
+  filter(Year_pfirs == Year_cm)
+```
+
+### Look at date differences
+```{r}
+dups <- dups %>% 
+  mutate(diff_dates_start = difftime(Date_pfirs, ACTIVITY_START_cm, units = "days")) %>% 
+  mutate(diff_dates_end = difftime(Date_pfirs, ACTIVITY_END_cm, units = "days"))
+```
+
+## Remove duplicates with exact date match
+```{r}
+dups_daily <- dups %>% 
+  filter(Date_pfirs >= ACTIVITY_START_cm & Date_pfirs <= ACTIVITY_END_cm) 
+```
+
+#### Check
+```{r}
+dups_daily %>% 
+  select(Date_pfirs, ACTIVITY_START_cm, ACTIVITY_END_cm) %>% 
+  st_drop_geometry() %>% 
+  tail()
+```
+
+## Reorder columns
+
+```{r}
+dups_daily <- dups_daily %>% 
+  select(Burn_Unit, ACTIVITY_NAME, Date_pfirs, ACTIVITY_START_cm, ACTIVITY_END_cm, acres_pfirs, acres_cm, Agency_cm, Agency_pfirs, Burn_Type_Simple, ACTIVITY_DESCRIPTION, Burn_Type_Simple, everything())
+```
+
+```{r}
+print(paste("There are ", nrow(dups_daily), "rows that are duplicated."))
+print(paste("-  Of those, there are ", length(unique(dups_daily$ID_PFIRS_CT)), "unique PFIRS records"))
+print(paste("-  and ", length(unique(dups_daily$ID_CM_Trt)), "unique CalMapper records"))
+```
+
+# Handle Duplicates
+
+## Method 1: Remove PFIRS points 
+
+### Remove duplicates from PFIRS
+```{r}
+pfirs_no_dups_daily <- pfirs %>% 
+  filter(!ID_PFIRS_CT %in% dups_daily$ID_PFIRS_CT)
+```
+
+### Combine pfirs and CalMapper
+
+#### Sync column names
+```{r}
+cm_merge <- cm %>% 
+  rename(Agency = AGENCY_NAME,
+          Acres_Burned = TREATED_ACRES,
+         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry()
+```
+
+```{r}
+pfirs_merge <- pfirs_no_dups_daily %>% 
+  rename(TREATMENT_NAME = Burn_Unit) %>% 
+  st_drop_geometry() %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
+  
+```
+
+#### Merge
+```{r}
+merged_method1 <- full_join(cm_merge, pfirs_merge)
+nrow(pfirs_merge)+nrow(cm_merge) == nrow(merged_method1)
+```
+
+```{r}
+merged_method1 <- merged_method1 %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Burn_Date, Agency, everything()) %>% 
+  arrange(TREATMENT_NAME)
+```
+
+#### Save
+```{r}
+write_excel_csv(merged_method1, file = here("excel/CalMapper_PFIRS_Method1.xls"))
+```
+
+### Plot acreage
+```{r}
+table_method1 <- merged_method1 %>% 
+  group_by(Year, Data_source) %>% 
+  summarize(acres = sum(Acres_Burned)) 
+plot_method1 <- table_method1 %>% 
+  ggplot()+
+  geom_col(aes(x = Year, y = acres, fill = Data_source))+
+  theme_minimal()+
+  ggtitle("Method 1")+
+  ylim(c(0,70000))+
+  guides(fill = "none")+
+  ylab("")
+plot_method1
+```
+
+
+## Method 2: Remove whichever has the lower acreage
+#### Sync column names
+```{r}
+cm_dup <- dups_daily %>% 
+  st_drop_geometry() %>% 
+  select(ID_CM_Trt) %>% 
+  distinct() 
+cm_dup
+```
+
+
+For the CalMapper polygons with multiple overlapping PFIRS points, add up the acreage in the PFIRS points. If the total acreage is greater than the treated acreage in CM, then delete the CM polygon. Otherwise, delete the PFIRS points.
+```{r}
+count = 0
+cm_merge <- cm %>% 
+  ungroup() %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry()
+pfirs_merge <- pfirs %>% ungroup() %>% st_drop_geometry()
+for(i in 1:nrow(cm_dup)){
+  cm_ID_i <- cm_dup[i,1] %>% unlist()
+  test <- dups_daily %>% filter(ID_CM_Trt == cm_ID_i)
+  if(nrow(test)==1){
+    count = count + 1 
+    if(test$acres_cm >= test$acres_pfirs){
+      pfirs_merge <- pfirs_merge %>% 
+        filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+    } else{
+      cm_merge <- cm_merge %>% 
+        filter(AQ_ID != cm_ID_i)
+      #print("deleted CalMapper")
+    }
+  } else if (nrow(test)>1){
+    if(test$acres_cm[1] >= sum(test$acres_pfirs)){
+      pfirs_merge <- pfirs_merge %>% 
+        filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+      #print("deleted multiple PFIRS")
+      #print(test$ID_PFIRS_CT)
+    } else{
+      cm_merge <- cm_merge %>% 
+        filter(AQ_ID != cm_ID_i)
+      #print("deleted CalMapper")
+    }
+  }
+}
+```
+
+### Troubleshoot for ID_CM_Trt == 298115 and 307233
+```{r}
+cm_ID_i <- 298115
+test <- dups_daily %>% filter(ID_CM_Trt == cm_ID_i)
+if(nrow(test)==1){
+  count = count + 1 
+  if(test$acres_cm >= test$acres_pfirs){
+    pfirs_merge <- pfirs_merge %>% 
+      filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+  } else{
+    cm_merge <- cm_merge %>% 
+      filter(AQ_ID != cm_ID_i)
+    #print("deleted CalMapper")
+  }
+} else if (nrow(test)>1){
+  if(test$acres_cm[1] >= sum(test$acres_pfirs)){
+    pfirs_merge <- pfirs_merge %>% 
+      filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+    #print("deleted multiple PFIRS")
+    print(test$ID_PFIRS_CT)
+  } else{
+    cm_merge <- cm_merge %>% 
+      filter(AQ_ID != cm_ID_i)
+    #print("deleted CalMapper")
+  }
+}
+```
+
+
+
+```{r}
+print(paste("Out of all the duplicates,", count, "are 1:1 duplicates, and", nrow(cm_dup)-count, "CalMapper ID's are more complicated"))
+```
+
+```{r}
+print(paste("There were", nrow(cm)-nrow(cm_merge), "rows deleted from CalMapper"))
+print(paste("There were", nrow(pfirs)-nrow(pfirs_merge), "rows deleted from PFIRS"))
+```
+
+### Merge 
+
+```{r}
+cm_merge <- cm_merge %>% 
+  rename(Agency = AGENCY_NAME,
+          Acres_Burned = TREATED_ACRES,
+         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
+  st_drop_geometry()
+```
+
+```{r}
+pfirs_merge <- pfirs_merge %>% 
+  rename(TREATMENT_NAME = Burn_Unit) %>% 
+  st_drop_geometry() %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
+```
+
+```{r}
+merged_method2 <- full_join(cm_merge, pfirs_merge)
+nrow(pfirs_merge)+nrow(cm_merge) == nrow(merged_method2)
+```
+
+### Plot acreage
+```{r}
+table_method2 <- merged_method2 %>% 
+  group_by(Year, Data_source) %>% 
+  summarize(acres = sum(Acres_Burned))
+plot_method2 <- table_method2 %>% 
+  ggplot()+
+  geom_col(aes(x = Year, y = acres, fill = Data_source))+
+  theme_minimal()+
+  ggtitle("Method 2")+
+  ylim(c(0,70000))+
+  ylab("")+
+    guides(fill = "none")
+plot_method2
+```
+
+## Method 3: Method 2 but with a 30-day buffer
+
+#### Filter by date
+```{r}
+dups_monthly <- dups %>% 
+  filter((Date_pfirs >= ACTIVITY_START_cm & Date_pfirs <= ACTIVITY_END_cm) | abs(diff_dates_start)<30 | abs(diff_dates_end)<30) 
+```
+
+#### Create list of CM unique records in `dups_monthly`
+```{r}
+cm_dup <- dups_monthly %>% 
+  st_drop_geometry() %>% 
+  select(ID_CM_Trt) %>% 
+  distinct() 
+cm_dup
+```
+
+For the CalMapper polygons with multiple overlapping PFIRS points, add up the acreage in the PFIRS points. If the total acreage is greater than the treated acreage in CM, then delete the CM polygon. Otherwise, delete the PFIRS points.
+```{r}
+count = 0
+
+cm_merge <- cm %>% 
+  ungroup() %>% 
+  mutate(gis_acres_treatment = as.numeric(st_area(cm)/4046.86)) %>% 
+  st_drop_geometry()
+
+pfirs_merge <- pfirs %>% ungroup() %>% st_drop_geometry()
+
+for(i in 1:nrow(cm_dup)){
+  cm_ID_i <- cm_dup[i,1] %>% unlist()
+  test <- dups_monthly %>% filter(ID_CM_Trt == cm_ID_i)
+  if(nrow(test)==1){
+    count = count + 1 
+    if(test$acres_cm >= test$acres_pfirs){
+      pfirs_merge <- pfirs_merge %>% 
+        filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+    } else{
+      cm_merge <- cm_merge %>% 
+        filter(AQ_ID != cm_ID_i)
+      #print("deleted CalMapper")
+    }
+  } else if (nrow(test)>1){
+    if(test$acres_cm[1] >= sum(test$acres_pfirs)){
+      pfirs_merge <- pfirs_merge %>% 
+        filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+      #print("deleted multiple PFIRS")
+      #print(test$ID_PFIRS_CT)
+    } else{
+      cm_merge <- cm_merge %>% 
+        filter(AQ_ID != cm_ID_i)
+      #print("deleted CalMapper")
+    }
+  }
+}
+```
+
+
+### Test
+```{r}
+
+test <- dups_monthly %>% filter(ID_CM_Trt == cm_ID_i)
+if(nrow(test)==1){
+  count = count + 1 
+  if(test$acres_cm >= test$acres_pfirs){
+    pfirs_merge <- pfirs_merge %>% 
+      filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+  } else{
+    cm_merge <- cm_merge %>% 
+      filter(AQ_ID != cm_ID_i)
+    #print("deleted CalMapper")
+  }
+} else if (nrow(test)>1){
+  if(test$acres_cm[1] >= sum(test$acres_pfirs)){
+    pfirs_merge <- pfirs_merge %>% 
+      filter(!ID_PFIRS_CT %in% test$ID_PFIRS_CT)
+    #print("deleted multiple PFIRS")
+    print(test$ID_PFIRS_CT)
+  } else{
+    cm_merge <- cm_merge %>% 
+      filter(AQ_ID != cm_ID_i)
+    #print("deleted CalMapper")
+  }
+}
+```
+
+
+```{r}
+print(paste("Out of all the duplicates,", count, "are 1:1 duplicates, and", nrow(cm_dup)-count, "CalMapper ID's are more complicated"))
+```
+
+```{r}
+print(paste("There were", nrow(cm)-nrow(cm_merge), "rows deleted from CalMapper"))
+print(paste("There were", nrow(pfirs)-nrow(pfirs_merge), "rows deleted from PFIRS"))
+```
+
+### Merge 
+
+```{r}
+cm_merge <- cm_merge %>% 
+  rename(Agency = AGENCY_NAME,
+          Acres_Burned = TREATED_ACRES,
+         Burn_Type_Simple = ACTIVITY_DESCRIPTION) %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, ACTIVITY_START, ACTIVITY_END, Agency, everything()) %>% 
+  st_drop_geometry()
+```
+
+```{r}
+pfirs_merge <- pfirs_merge %>% 
+  rename(TREATMENT_NAME = Burn_Unit) %>% 
+  st_drop_geometry() %>% 
+  select(Data_source, TREATMENT_NAME, Acres_Burned, Burn_Type_Simple, Burn_Date, Agency, Burn_Type, everything())
+```
+
+```{r}
+merged_method3 <- full_join(cm_merge, pfirs_merge)
+nrow(pfirs_merge)+nrow(cm_merge) == nrow(merged_method3)
+```
+
+## Spot check
+
+### Example 2
+```{r}
+merged_method1 %>% 
+ filter(TREATMENT_NAME %in% c("CD", "Pasture", "West Ridgetop") | ACTIVITY_ID ==27381) %>% 
+  select(1:7, Burn_Date)
+
+merged_method2 %>% 
+ filter(TREATMENT_NAME %in% c("CD", "Pasture", "West Ridgetop") | ACTIVITY_ID ==27381) %>% 
+  select(1:6, Burn_Date)
+
+merged_method3 %>% 
+  filter(TREATMENT_NAME %in% c("CD", "Pasture", "West Ridgetop") | ACTIVITY_ID ==27381) %>% 
+  select(1:6, Burn_Date)
+```
+
+
+### Example 3
+```{r}
+merged_method1 %>% 
+ filter(TREATMENT_NAME %in% c("Rx-North-076-HUU Hunt Ranch 19 VMP", "Hunt VMP Units 4 & 5") | AQ_ID == 292291 | ID_PFIRS_CT == 519) %>% 
+  select(1:6, Burn_Date)
+
+merged_method2 %>% 
+ filter(TREATMENT_NAME %in% c("Rx-North-076-HUU Hunt Ranch 19 VMP", "Hunt VMP Units 4 & 5") | AQ_ID == 292291 | ID_PFIRS_CT == 519) %>% 
+  select(1:6, Burn_Date)
+
+merged_method3 %>% 
+ filter(TREATMENT_NAME %in% c("Rx-North-076-HUU Hunt Ranch 19 VMP", "Hunt VMP Units 4 & 5") | AQ_ID == 292291 | ID_PFIRS_CT == 519) %>% 
+  select(1:6, Burn_Date)
+```
+
+
+### Example 5
+```{r}
+merged_method1 %>% 
+  filter(TREATMENT_NAME == "2022-Johnson VMP Block1" | TREATMENT_NAME == "2022_Johnson Burn Block 1") %>% 
+  select(1:7, Burn_Date)
+
+merged_method2 %>% 
+  filter(TREATMENT_NAME == "2022-Johnson VMP Block1" | TREATMENT_NAME == "2022_Johnson Burn Block 1") %>% 
+  select(1:7, Burn_Date)
+
+merged_method3 %>% 
+  filter(TREATMENT_NAME == "2022-Johnson VMP Block1" | TREATMENT_NAME == "2022_Johnson Burn Block 1") %>% 
+  select(1:7, Burn_Date)
+```
+
+### Example 6
+```{r}
+merged_method1 %>% 
+  filter(TREATMENT_NAME == "UNIT 7" | CALMAPPER_ID == "2600-2020-VMP-001") %>% 
+  select(1:6, Burn_Date)
+
+merged_method2 %>% 
+  filter(TREATMENT_NAME == "UNIT 7" | CALMAPPER_ID == "2600-2020-VMP-001") %>% 
+  select(1:6, Burn_Date)
+
+merged_method3 %>% 
+  filter(TREATMENT_NAME == "UNIT 7" | CALMAPPER_ID == "2600-2020-VMP-001") %>% 
+  select(1:6, Burn_Date)
+```
+
+### Example 8
+```{r}
+merged_method1 %>% 
+  filter(ID_PFIRS_CT %in% c(39, 42, 44) |AQ_ID %in% c("69460", "69461")) %>% 
+  select(1:6, Burn_Date)
+
+merged_method2 %>% 
+  filter(ID_PFIRS_CT %in% c(39, 42, 44) |AQ_ID %in% c("69460", "69461")) %>% 
+  select(1:6, Burn_Date)
+
+merged_method3 %>% 
+  filter(ID_PFIRS_CT %in% c(39, 42, 44) |AQ_ID %in% c("69460", "69461")) %>% 
+  select(1:6, Burn_Date)
+
+```
+
+
+### Plot acreage
+```{r}
+table_method3 <- merged_method3 %>% 
+  group_by(Year, Data_source) %>% 
+  summarize(acres = sum(Acres_Burned))
+plot_method3 <- table_method3 %>% 
+  ggplot()+
+  geom_col(aes(x = Year, y = acres, fill = Data_source))+
+  theme_minimal()+
+  ggtitle("Method 3")+
+  ylim(c(0,70000))+
+  ylab("")
+plot_method3
+```
+
+# Plot bar charts side-by-side
+
+## Add numeric labels
+
+### Method 0: No duplicates removed
+```{r}
+table_method0_a <- table_method0 %>% 
+  select(Year, source, ac) %>% 
+  group_by(Year) %>% 
+  mutate(total = sum(ac) %>% round(-2))
+table_method0_a
+```
+
+```{r}
+plot_method0_a <- plot_method0+
+  geom_text(data = table_method0_a, aes(x = Year, y = total/1000, label = paste(comma(total), "acres")), vjust = -0.5)+
+  scale_fill_manual(values = c("#799654", "#1A7EA6"))+
+  xlab("")+
+  ylab("Thousand acres")+
+  ylim(c(0, 140))+
+  theme( axis.text.x = element_text(size = 12))
+plot_method0_a
+```
+
+### Method 0, with added black bar
+```{r}
+add_on <- data.frame(Year = "2020, US EPA", ac = 79617, source = "HMS")
+table_method0_b <- rbind(table_method0, add_on)
+table_method0_b
+```
+
+```{r}
+table_method0_b <- table_method0_b %>% 
+  filter(!Year %in% c(2021, 2022) & source != "cm")%>% 
+  ungroup() %>% 
+  mutate(total = sum(ac) %>% round(-2)) %>% 
+  mutate(Year = "2020, US EPA")
+table_method0_b
+```
+
+```{r}
+plot_method0_b <- ggplot(table_method0_b)+
+  geom_col(aes(x = Year, y = ac/1000, fill = source), width = 0.35)+
+  geom_text(data = table_method0_b, aes(x = Year, y = total/1000, label = paste(comma(total), "acres")), vjust = -0.5)+
+  scale_fill_manual(values = c("black", "#1A7EA6"))+
+  ylab("acres")+
+  theme_minimal()+
+  guides(fill = "none")+
+  #ylim(c(0, 140))+
+  xlab("")+
+  ylab("")+
+  theme(
+    plot.margin = margin(0, 0, 0, -3, unit = "cm"),  # Adjust the right margin (3 cm in this case)
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 12)
+  )
+plot_method0_b
+```
+
+```{r}
+(plot_method0_a | plot_method0_b)
+ggsave("figures/bar_chart_USEPA.png", width = 8, height = 5.5, units = c("in"))
+```
+
+### Method 1
+```{r}
+table_method1 <- table_method1 %>% 
+  group_by(Year) %>% 
+  mutate(total = sum(acres) %>% round(-2))
+table_method1
+```
+
+### Method 2
+```{r}
+table_method2 <- table_method2 %>% 
+  group_by(Year) %>% 
+  mutate(total = sum(acres) %>% round(-2))
+table_method2
+```
+
+### Method 3
+```{r}
+table_method3 <- table_method3 %>% 
+  group_by(Year) %>% 
+  mutate(total = sum(acres) %>% round(-2))
+table_method3
+```
+
+```{r}
+plot_method0 <- plot_method0+
+  geom_text(data = table_method0, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
+```
+
+```{r}
+plot_method2 <- plot_method2+
+  geom_text(data = table_method2, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
+```
+
+```{r}
+plot_method3 <- plot_method3+
+  geom_text(data = table_method3, aes(x = Year, y = total, label = comma(total)), vjust = -0.5)+
+  xlab("")
+```
+
+```{r}
+all_plots <- (plot_method0_a | plot_method1 | plot_method2 | plot_method3)
+all_plots
+```
+
+# Write duplicates to shapefile
+
+```{r}
+# dups_daily_esri <- dups_daily %>% 
+  # rename(Obj = TREATMENT_OBJECTIVE) %>% 
+  # select(-TREATMENT_SHAPE, -Data_source, -Data_source.1)
+```
+
+
+```{r}
+# st_write(dups_daily_esri, dsn = "shapefiles", layer = "duplicates_final", driver = "ESRI Shapefile", delete_layer = T)
+# 
+# dups_daily_point <- pfirs %>% 
+#   filter(ID_PFIRS_CT %in% dups_daily$ID_PFIRS_CT) 
+# 
+# st_write(dups_daily_point, dsn = "shapefiles", layer = "duplicates_POINT", driver = "ESRI Shapefile", delete_layer = T)
+```

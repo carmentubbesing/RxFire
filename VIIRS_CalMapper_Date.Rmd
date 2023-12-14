@@ -9,14 +9,16 @@ date: "2023-10-30"
 ```{r, include = F}
 require(tidyverse)
 require(readxl)
+require(sf)
 ```
 
 # Load data
+This comes from `compare_VIIRS_CT_LR.Rmd`
 ```{r}
-df <- read.csv("excel/viirs_overlap_calmapper.csv")
+df <- read_rds(file.path(ref_path, 'VIIRS/CA_2020/viirs_int.rds'))
 ```
 
-# Filter to CalMapper with more than one date 
+# Filter to CalMapper where activity end date is not the same as activity start date
 ```{r}
 nrow_old <- nrow(df)
 df <- df %>% 
@@ -24,17 +26,61 @@ df <- df %>%
 print(paste("removed", nrow_old - nrow(df), "rows"))
 ```
 
-# Add one to duration columns because burning happens on both start and end dates
+# Check dates 
+
+## Make sure AQ_ID==199715 has dates of 7/1 to 12/31
 ```{r}
-df <- df %>% 
-  mutate(day_from_st = day_from_st + 1) %>% 
-  mutate(n_days = n_days + 1)
+df %>% 
+  filter(AQ_ID == 199715) %>% 
+  st_drop_geometry() %>% 
+  select(ACTIVITY_START, ACTIVITY_END) %>% 
+  distinct()
 ```
 
+## Check time zone of the date columns. This should be TRUE
+```{r}
+tz(df$date) == tz(df$ACTIVITY_START) 
+tz(df$ACTIVITY_START) == tz(df$ACTIVITY_END)
+```
+
+# Calculate days from start of fire using `date` and `ACTIVITY_START`
+```{r}
+df <- df %>% 
+  mutate(day_from_st = as.numeric(date - as.Date(ACTIVITY_START)))
+```
+
+## Check
+
+Print date, ACTIVITY_START, and day_from_st
+```{r}
+df %>% 
+  filter(AQ_ID == 199715) %>% 
+  st_drop_geometry() %>% 
+  select(date, ACTIVITY_START, day_from_st) %>% 
+  distinct()
+```
+
+## Remove points with negative day_from_st
+```{r}
+nrow_old <- nrow(df)
+df <- df %>% 
+  filter(day_from_st >= 0)
+print(paste("removed", nrow_old - nrow(df), "rows"))
+```
+
+## Remove points with date after activity end date
+```{r}
+nrow_old <- nrow(df)
+df <- df %>% 
+  filter(date < ACTIVITY_END)
+print(paste("removed", nrow_old - nrow(df), "rows"))
+```
+
+# Create rank column for a nice plot
 ```{r}
 df_rank <- df %>% 
   group_by(AQ_ID) %>% 
-  arrange(n_days) %>% 
+  arrange(duration) %>% 
   select(AQ_ID) %>% 
   distinct(AQ_ID) %>% 
   ungroup()
@@ -42,16 +88,34 @@ df_rank$rank <-  seq(1, length(unique(df$AQ_ID)))
 ```
 
 ```{r}
-df <-   left_join(df, df_rank, by = "AQ_ID")
+df <- left_join(df, df_rank, by = "AQ_ID")
 ```
 
 ```{r}
 ggplot(df)+
-  geom_segment(aes(x = 0, xend = n_days, y = rank, yend = rank), col = "dark green")+
+  geom_segment(aes(x = 0, xend = duration, y = rank, yend = rank), col = "dark green")+
   geom_point(aes(x = day_from_st, y = rank), col = "red")+
   xlab("Days since start of CalMapper record")
 ggsave("figures/VIIRS_CM_dates.png")
 ```
+
+
+# Plot with normalized dates
+## Create day_decimal
+```{r}
+df <- df %>% 
+  mutate(day_decimal = (day_from_st)/as.numeric(duration))
+```
+
+## Check day_decimal 
+```{r}
+df %>% 
+  st_drop_geometry() %>% 
+  select(date, ACTIVITY_START, ACTIVITY_END, day_from_st, duration, day_decimal) %>% 
+  distinct() %>% 
+  head()
+```
+
 
 ```{r}
 df %>% 
@@ -59,13 +123,51 @@ df %>%
   geom_histogram(aes(x = day_decimal), bins = 60, fill = "#DC3F3E")+
   xlab("Date of VIIRS detect relative to CalMappers duration")+
   theme_bw()
-ggsave("figures/VIIRS_CM_dates_histogram.png")
+ggsave("figures/VIIRS_CM_dates_histogram.png", width = 9, height = 5.5)
 ```
+
+## Find what the peak at around 0.8 is about
+```{r}
+# Find the most common day_decimal other than 0
+df %>% 
+  st_drop_geometry() %>%
+  group_by(day_decimal) %>% 
+  count() %>% 
+  arrange(desc(n)) %>% 
+  head()
+```
+
+# Look at the AQ_IDs with day_decimal around equal to 0.810
+```{r}
+df %>% 
+  filter(day_decimal > 0.805 & day_decimal < 0.815) %>%
+  st_drop_geometry() %>%
+  group_by(AQ_ID, day_decimal, date, ACTIVITY_START, ACTIVITY_END, day_from_st) %>% 
+  count()
+```
+
+The answer is that there just happens to be a big fire with many VIIRS points on one day.
 
 # Find the bar I want to map
 ```{r}
-df %>% arrange(desc(n_days)) %>% 
+df %>% 
+  arrange(desc(rank)) %>% 
+  select(AQ_ID, ACTIVITY_NAME, ACTIVITY_START, duration, rank) %>%
+  st_drop_geometry() %>% 
+  distinct() %>% 
   head()
 df %>% 
-  filter(AQ_ID == 271821)
+  filter(AQ_ID == 271821 | AQ_ID == 199715) %>% 
+  st_drop_geometry() %>%
+  select(date, ACTIVITY_NAME, ACTIVITY_START, ACTIVITY_END, day_from_st, duration, day_decimal) 
 ```
+
+```{r}
+# Add a label to each bar showing the AQ_ID
+ggplot(df)+
+  geom_segment(aes(x = 0, xend = duration, y = rank, yend = rank), col = "dark green")+
+  geom_point(aes(x = day_from_st, y = rank), col = "red")+
+  xlab("Days since start of CalMapper record")+
+  geom_text(aes(x = 0, y = rank, label = AQ_ID), hjust = 0, vjust = 0)
+```
+

@@ -1,0 +1,150 @@
+---
+title: "prep_FRAP"
+output: html_document
+date: "2023-09-12"
+---
+
+```{r, include = F}
+require(tidyverse)
+require(sf)
+require(fs)
+require(mapview)
+```
+
+
+## FRAP
+
+### Load
+```{r}
+frap_dir <- "C:/Users/ctubbesi/OneDrive - California Air Resources Board/Documents/Reference data/FRAP fire perimeters"
+```
+
+```{r}
+frap <- st_read(paste(frap_dir, "/rxburn22_1.shp", sep = ""))
+```
+
+These are all FRAP records in their Rx fire database 
+
+# Clean
+
+## Fix column names
+```{r}
+frap <- frap %>% 
+  rename(TREATMENT_TYPE = "TREATMEN_1")
+```
+
+
+## Filter to 2017-2022
+```{r}
+frap <- frap %>% 
+  filter(YEAR_ %in% seq(2017, 2022))
+```
+
+### Add treatment names
+```{r}
+frap <- frap %>% 
+  mutate(treatment_type = case_when(
+    TREATMENT_TYPE == 1 ~ "Broadcast Burn",
+    TREATMENT_TYPE == 2 ~ "Fire Use",
+    TREATMENT_TYPE == 3 ~ "Hand Pile Burn",
+    TREATMENT_TYPE == 4 ~ "Jackpot Burn",
+    TREATMENT_TYPE == 5 ~ "Machine Pile Burn",
+    TRUE ~ "NA"
+  ))
+```
+
+```{r}
+summary(as.factor(frap$treatment_type))
+```
+
+```{r}
+file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022.Rdata", sep = "")
+save(frap, file = file)
+```
+
+
+# Mask out federal lands
+```{r}
+load(file = "Rdata/NF.Rdata")
+```
+
+```{r}
+#NF <- st_transform(NF, st_crs(frap))
+```
+
+
+
+```{r}
+#frap <- st_difference(frap, NF)
+```
+
+# Save for statewide analysis
+
+```{r}
+file <- paste(ref_path, "/FRAP fire perimeters/frap_Rx_fire_2017-2022_noNF.Rdata", sep = "")
+save(frap, file = file)
+```
+
+
+```{r}
+frap_20 <- frap %>% 
+  filter(YEAR_ == 2020)
+save(frap_20, file = "Rdata/frap_2020_Rx.Rdata")
+```
+
+
+# Dissolve by year
+```{r}
+table <- data.frame("year" = numeric(), "area" = numeric())
+for(i in unique(frap$YEAR_)){
+  print(paste("for year", i))
+  frap_i <- frap %>%
+    filter(YEAR_ == i)
+  print(paste("there are ", nrow(frap_i), " fires"))
+
+  # Dissolve polygons
+  frap_i_diss <- frap_i %>%
+    st_union() %>%
+    st_sf()
+  name <- paste("frap_diss_", i, sep = "")
+  assign(name, frap_i_diss)
+
+  # Calculate area
+  area_i = st_area(frap_i_diss)
+  name_area = paste("area_", i, sep = "")
+  assign(name_area, area_i)
+  print(paste("and ", area_i, " acres"))
+
+  # Add to table
+  table_i <- data.frame(i, area_i)
+  table <- rbind(table, table_i)
+  print("")
+}
+```
+
+```{r}
+save(table, file = "Rdata/frap_2017-2022_areas_diss.Rdata")
+```
+
+```{r}
+save(frap_diss_2019, file = "Rdata/frap_2019_dis_Rx.Rdata")
+```
+
+# Calculate acreage by year
+```{r}
+names(frap)
+```
+
+```{r}
+frap_ac_year <- frap %>% 
+  st_drop_geometry() %>% 
+  group_by(YEAR_) %>% 
+  summarize(acres = sum(TREATED_AC))
+frap_ac_year
+```
+
+```{r}
+save(frap_ac_year, file = "Rdata/frap_acres_yr.Rdata")
+write.csv(frap_ac_year, file = "excel/frap_acres_yr.csv", row.names = F)
+```
+

@@ -2,7 +2,9 @@
 title: "Q1_projects_under_7days"
 author: "Lisa Rosenthal"
 date: "2023-09-14"
-output: html_document
+output:     
+  html_document:
+    toc: TRUE
 editor_options: 
   chunk_output_type: console
 ---
@@ -15,7 +17,6 @@ library(fs)
 library(units)
 library(mapview)
 theme_set(theme_bw() + theme(panel.grid.minor = element_blank()))
-
 ```
 
 # Question #1
@@ -37,13 +38,10 @@ b.) Is there an apparent detection limit (e.g., acres burned or some other metri
 ## Import data
 
 ```{r}
-
 # VIIRS fire detects
 viirs <- read_rds(file.path(ref_path, 'VIIRS/CA_2020/viirs_nonAg.rds')) 
 
 # CalMAPPER data
-CM <- read_rds(file.path(ref_path, 'CalMAPPER/treatment-activities.rds'))
-
 if(ref_path == "C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Local_reference_data"){
   print("hi it's lisa's computer")
   CM <- read_rds(file.path(ref_path, 'CalMAPPER/treatment-activities.rds'))
