@@ -6,11 +6,12 @@ output:
 date: "2023-09-05"
 ---
 
-```{r, include = F}
+```{r}
 require(tidyverse)
 require(sf)
 require(readxl)
 require(mapview)
+require(here)
 ```
 
 # Set params
@@ -21,7 +22,7 @@ pulled_year <- substr(file, nchar(file)-8, nchar(file)-5)
 filter_year <- 2019
 min_year <-  2017
 max_year <-  2022
-include_NF <- "no"
+include_NF <- "yes" # options = "yes" or "no"
 ```
 
 ```{r}
@@ -66,7 +67,6 @@ xy <- xy %>%
 xy <- xy %>% 
   mutate(Year = year(Burn_Date))
 ```
-
 
 ```{r}
 summary(as.factor(xy$Year))
@@ -122,27 +122,6 @@ sf %>%
   arrange(desc(n))
 ```
 
-```{r}
-# Find the Burn_Unit with 
-sf %>% 
-  filter(Year == 2021) %>% 
-  filter(Acres_Burned == 3) %>% 
-  group_by(Year, Acres_Burned, geometry) %>% 
-  count() %>% 
-  arrange(desc(n))
-```
-
-# Find the record with Year == 2021, Acres_Burned == 3, and geometry == (-123.225 39.137)
-```{r}
-sf %>% 
-  filter(Year == 2021) %>% 
-  filter(Acres_Burned == 3) %>% 
-  filter(geometry == st_sfc(st_point(c(-123.225, 39.137)), crs = 4326)) %>% 
-  select(Burn_Date, Burn_Unit, Acres_Burned, Year, geometry)
-
-```
-
-
 
 ### Export to shapefile
 ```{r, warning=F}
@@ -153,14 +132,11 @@ st_write(sf, "shapefiles", layer_name, driver = "ESRI Shapefile", delete_layer =
 ### Save as Rdata
 ```{r}
 pfirs <- sf
-save(pfirs, file = paste0("Rdata/", layer_name, ".Rdata"))
+save(pfirs, file = paste0("../Rdata/", layer_name, ".Rdata"))
 remove(layer_name)
 ```
 
-
-# Mask out federal lands
-
-## Crop to state of CA
+# Crop to state of CA
 ```{r}
 CA <- st_read(dsn = paste0(ref_path, "/CA boundary/ca-state-boundary/", layer = "CA_State_TIGER2016_50_Buffer.shp"))
 CA <- st_transform(CA, st_crs(sf))
@@ -169,8 +145,6 @@ CA <- st_transform(CA, st_crs(sf))
 ```{r}
 sf <- st_intersection(sf, CA)
 ```
-
-
 
 ## Calculate agreage of each, by year
 ```{r}
@@ -182,52 +156,34 @@ table <- pfirs %>%
 table
 ```
 
-```{r}
-load(file = "Rdata/NF.Rdata")
-```
+# Mask out federal lands (optional)
 
 ```{r}
-object.size(NF)/100000
-NF <- st_simplify(NF, dTolerance = 10)
-object.size(NF)/100000
+if(include_NF == "no"){
+  load(file = here("Rdata/NF.Rdata"))
+  object.size(NF)/100000
+  NF <- st_simplify(NF, dTolerance = 10)
+  object.size(NF)/100000
+  NF <- st_transform(NF, st_crs(sf))
+  sf_use_s2(FALSE) # prevents an error in geometry handling
+  sf_noNF <- st_difference(sf, NF)
+  #mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red","blue"))
+  
+  # Add radius that matches the area of the PFIRS burn
+  sf_noNF <- sf_noNF %>% 
+    mutate(buffer_radius = sqrt((4047*Acres_Burned)/pi))
+  
+  # Save
+  layer = paste0("../Rdata/PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
+  save(sf_noNF, file = "../Rdata/PFIRS_2017-2022_pull2023_noNF.Rdata")
+  
+  # Export to shapefile
+  layer_name = paste0("PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
+  st_write(sf_noNF, dsn = here("shapefiles"), layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
+} else {
+  print("DID NOT REMOVE NATIONAL FOREST LAND")
+}
 ```
-
-
-```{r}
-NF <- st_transform(NF, st_crs(sf))
-```
-
-This prevents an error in geometry handling:
-```{r}
-sf_use_s2(FALSE)
-```
-
-```{r}
-sf_noNF <- st_difference(sf, NF)
-```
-
-```{r}
-#mapview::mapview(list(NF, sf_noNF), col.regions=list("red","blue"),col=list("red","blue"))
-```
-
-# Add radius that matches the area of the PFIRS burn
-```{r}
-sf_noNF <- sf_noNF %>% 
-  mutate(buffer_radius = sqrt((4047*Acres_Burned)/pi))
-```
-
-# Save as Rdata
-```{r}
-layer = paste0("Rdata/PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
-save(sf_noNF, file = "Rdata/PFIRS_2017-2022_pull2023_noNF.Rdata")
-```
-
-# Export to shapefile
-```{r, warning = F}
-layer_name = paste0("PFIRS_", min_year, "_", max_year, "_pull", pulled_year, "_noNF.Rdata" )
-st_write(sf_noNF, dsn = "shapefiles", layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
-```
-
 
 # Filter to `filter_year`s
 ```{r}
@@ -247,13 +203,13 @@ sf_year <- st_as_sf(xy_year, coords = c("Longitude", "Latitude"), crs = 4326)
 ## Export to shapefile
 ```{r, warning = F}
 layer_name = paste0("PFIRS_", filter_year, "_pull", pulled_year)
-st_write(sf_year, dsn = "shapefiles", layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
+st_write(sf_year, dsn = here("shapefiles"), layer = layer_name, driver = "ESRI Shapefile", delete_layer = T)
 ```
 
 ## Write to .Rdata
 ```{r}
-file = paste0("Rdata/PFIRS_", filter_year, "_pull", pulled_year, ".Rdata" )
-save(sf_year, file = layer)
+file = paste0("../Rdata/PFIRS_", filter_year, "_pull", pulled_year, ".Rdata" )
+save(sf_year, file = file)
 ```
 
 

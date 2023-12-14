@@ -44,16 +44,11 @@ act <- act %>%
   filter(!ACTIVITY_DESCRIPTION %in% c("GIS Validation", "Education Outreach", "Project Administration", "Planning Meeting", "Public Contacts", "Water Site Development"))
 ```
 
-
-## Look for odd units of measurement
+## Remove activities that aren't complete or aren't measured in acres
 ```{r}
-act %>% 
-  group_by(ACTIVITY_DESCRIPTION, UNIT_OF_MEASURE) %>% 
-  count() %>% 
-  arrange(desc(UNIT_OF_MEASURE)) %>% 
-  print(n=47)
+act <- act %>% 
+  filter(ACTIVITY_STATUS == "Complete", UNIT_OF_MEASURE == "Acres")
 ```
-
 
 ## Remove unnecessary columns
 ```{r}
@@ -133,7 +128,8 @@ act_sf_fire %>%
 # Save data from all years, all places
 ```{r}
 cm <- act_sf_fire
-save(cm, file = "Rdata/CalMapper_activities_fire.Rdata")
+save(cm, file = here("Rdata/CalMapper_activities_fire.Rdata"))
+write.csv(cm, file = here("excel/CalMapper_activities_fire.csv"), row.names = F)
 ```
 
 ```{r}
@@ -256,7 +252,7 @@ act_sf_fire_noNF <- act_sf_fire %>%
 # Save data from all years, outside NF
 ```{r}
 cm <- act_sf_fire_noNF
-save(cm, file = "Rdata/CalMapper_activities_fire_noNF.Rdata")
+save(cm, file = here("Rdata/CalMapper_activities_fire_noNF.Rdata"))
 ```
 
 ```{r}
@@ -265,6 +261,6 @@ act_2020 <- st_difference(act_2020, NF)
 
 ## Save
 ```{r}
-save(act_2020, file = "Rdata/CalMapper_activities_fire_2020_noNF.Rdata")
+save(act_2020, file = here("Rdata/CalMapper_activities_fire_2020_noNF.Rdata"))
 ```
 

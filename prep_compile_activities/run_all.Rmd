@@ -4,18 +4,24 @@ output: html_document
 date: "2023-09-18"
 ---
 
-
-```{r}
-require(tidyverse)
+```{r setup, include=FALSE}
 require(knitr)
 require(here)
 ```
 
-```{r}
-rmarkdown::render("prep_NF.Rmd", "html_document")
-rmarkdown::render("prep_CalMapper.Rmd", "html_document")
-rmarkdown::render("prep_FRAP.Rmd", "html_document")
-rmarkdown::render("prep_PFIRS.Rmd", "html_document")
-rmarkdown::render("FRAP_CalMapper.Rmd", "html_document")
+
+# To create the figure that looks like this:
+```{r fig}
+knitr::include_graphics(here("figures/bar_chart_USEPA.png"))
 ```
+
+# Run the following scripts in this order:
+
+```{r code, echo = TRUE, message = FALSE, warning = FALSE, results = FALSE}
+setwd(here("prep_compile_activities"))
+rmarkdown::render("prep_CalMapper.Rmd", "html_document")
+rmarkdown::render("prep_PFIRS.Rmd", "html_document")
+rmarkdown::render("merge_CalMapper_PFIRS.Rmd", "html_document")
+```
+
 
