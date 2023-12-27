@@ -1,247 +1,50 @@
 
 
-# install.packages("arcpullr")
-
-# library(arcpullr)
-# 
-# url <- 'https://gsal.sig-gis.com/server/rest/services/Hosted/ITS_Dashboard_Feature_Layer/FeatureServer'
-# layer_info <- arcpullr::get_layer_info(url)
-# layers <- layer_info$layers
-# 
-# urls <- paste(url, layers$id, sep = '/')
-# layers <- map(urls, get_spatial_layer)
-# 
-# 
-
 library(fs)
 library(sf)
 library(tidyverse)
 
-# functions ---------------------------------------------------------------
+source('functions.R')
 
+# load data ---------------------------------------------------------------
 
-# convert acres to buffer radius
-acres_to_radius <- function(x){
-  require(units)
-  area <- set_units(x, acre)
-  area_m2 <- set_units(area, m^2)
-  
-  # get r
-  r <- as.numeric(sqrt(area_m2/pi))
-  return(r)
-}
-
-f_spatiotemporal_match <- function(x, y, x_date, y_start, y_end){
-  
-  # make sure crs of x and y are the same
-  test <- st_crs(x) == st_crs(y)
-  if(!test) stop("x and y need to have the same crs")
-  
-  # make this list one intersection per row
-  int_list <- st_intersects(x, y)
-  int_df <- tibble(x_row = rep(1:nrow(x), times = map_vec(int_list, length)), 
-                   y_row = unlist(int_list))
-  
-  f_overlap <- function(x_row, y_row){
-    # determine if they spatially AND temporally overlap
-    spatial <- y[y_row,] # spatially intersecting
-    x_date <- as_date(pull(x, x_date)[x_row])
-    y_start <- as_date(pull(spatial, y_start))
-    y_end <- as_date(pull(spatial, y_end))
-    temporal <- (y_start <= x_date) & (y_end >= x_date)
-    if(is.na(temporal)) stop("y contains dates that are NA. fix that.")
-    if(temporal){
-      tibble(x_row = x_row, y_row = y_row, match = 'spatiotemporal', st_drop_geometry(spatial))
-    }else{
-      tibble(x_row = x_row, y_row = y_row, match = 'spatial', st_drop_geometry(spatial))
-    }
-  }
-  
-  tictoc::tic()
-  res <- map2_df(int_df$x_row, int_df$y_row, f_overlap, .progress = T)
-  tictoc::toc() #590
-  
-  return(res)
-}
-
-
-# load task force data ----------------------------------------------------
-
-
-
-
-# import task force data
-path <- dir_ls(file.path(ref_path, 'task force/Treatment_Tracking_Fire 20230926.gdb'), 
-               glob = '*.gdb', recurse = T)
-lyrs <- st_layers(path)
-
-tf_points <- st_read(path, lyrs$name[1]) %>% 
-  mutate(tf_id = 1:nrow(.), .before = everything()) %>% 
-  mutate(across(.cols = c(ACTIVITY_END, ACTIVITY_START, PROJECT_START, PROJECT_END,
-                          TREATMENT_START, TREATMENT_END), ~ as.Date(.x)))
-tf_polys <- st_read(path, lyrs$name[2]) %>% 
-  mutate(tf_id = (1:nrow(.)) + max(tf_points$tf_id), 
-         .before = everything()) %>% 
-  mutate(across(.cols = c(ACTIVITY_END, ACTIVITY_START, PROJECT_START, PROJECT_END,
-                          TREATMENT_START, TREATMENT_END), ~ as.Date(.x)))
-# st_drop_geometry(tf_points) %>% write_csv('tmp_outputs/full_tf_points.csv')
-# st_drop_geometry(tf_polys) %>% write_csv('tmp_outputs/full_tf_polygons.csv')
-
-
-# clean it up and only keep Rx fire activity ------------------------------
-
-
-# lines: can ignore the lines dataset
-# unique(tf_list[[1]]$activity_description) 
-
-# * points =============================== 
-# points: filter activity_cat == 'BENEFICIAL_FIRE'
-
-# columns to keep
-tf_points_clean <- tf_points %>% 
-  select(tf_id, ACTIVITY_DESCRIPTION, ACTIVITY_CAT, BROAD_VEGETATION_TYPE,
-         ACTIVITY_STATUS, ACTIVITY_QUANTITY, ACTIVITY_UOM, ACTIVITY_START, ACTIVITY_END, 
-         PRIMARY_OWNERSHIP_GROUP, ORG_ADMIN_t, Source) %>% 
-  janitor::clean_names() 
-
-# contains only fire, no treatments with EA (used by CRNA to measure # of piles)
-tf_points_clean <- tf_points_clean %>% 
-  filter(activity_cat == 'BENEFICIAL_FIRE', activity_uom == 'AC')
-
-# assign new geometries--either circle polygon or point
-radii <- acres_to_radius(tf_points_clean$activity_quantity) %>% 
-  replace_na(0)
-newshape <- st_buffer(tf_points_clean$Shape, radii)
-newshape[st_is_empty(newshape)] <- tf_points_clean$Shape[st_is_empty(newshape)] 
-st_geometry(tf_points_clean) <- newshape
-
-
-# * polygons ========================================
-# polygons: filter activity_cat == 'BENEFICIAL_FIRE'
-tf_polys_clean <- tf_polys %>% 
-  select(tf_id, ACTIVITY_DESCRIPTION, ACTIVITY_CAT, BROAD_VEGETATION_TYPE,
-         ACTIVITY_STATUS, ACTIVITY_QUANTITY, ACTIVITY_UOM, ACTIVITY_START, ACTIVITY_END, 
-         PRIMARY_OWNERSHIP_GROUP, ORG_ADMIN_t, Source) %>% 
-  janitor::clean_names() %>% 
-  filter(activity_cat == 'BENEFICIAL_FIRE')
-
-
-# * join together ====================================
-tf_joined <- bind_rows(tf_points_clean, tf_polys_clean) %>% 
-  rename(record_acres = activity_quantity) %>% 
-  mutate(gis_acres = units::set_units(st_area(.), acres) %>% signif(2) %>% as.numeric, 
-         activity_uom = NULL,
-         .after = record_acres)
-
-# compare to VIIRS, just use 2021 and 2022. 
-# if no start day, assume it was the day before the end date. 
-tf_2021_2022 <- tf_joined %>% 
-  # fix data where the start and stop dates got mixed up
-  mutate(duration = as_date(activity_end) - as_date(activity_start) %>% 
-           as.numeric() %>% replace_na(0),
-         activity_start = if_else(duration < 0, activity_end, activity_start),
-         activity_end = if_else(duration < 0, activity_start, activity_end)) %>% 
-  # assume if no start time, it's the same day as end date
-  mutate(activity_start = coalesce(activity_start, activity_end), 
-         duration = NULL) %>% 
-  filter(year(activity_end) %in% c(2021, 2022))
-
-# export and reimport to fix mutlisurface geometries
+# task force
 path <- file.path(ref_path, 'task force/tf_2021_2022.geojson')
-#st_write(tf_2021_2022, path, delete_dsn = T)
-
-
 tf_2021_2022 <- st_read(path)
 
-
-
-# find spatiotemporal overlap with VIIRS ----------------------------------
-
-
 # import VIIRS
-viirs_path <- file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_extracted.geojson')
+viirs_path <- file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_pfirs.geojson')
 viirs <- st_read(viirs_path)
 
-# make viirs time PST
-viirs <- viirs %>% 
-  mutate(datetime = paste(acq_date, acq_time) %>% 
-           ymd_hm %>% with_tz(tz = 'America/Los_Angeles'),
-         .before = acq_date
-  )
+# import matches
+tf_match <- read_csv(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_matches.csv'))
 
-# add in an ID column
-viirs$viirs_id <- 1:nrow(viirs)
-
-# check for a spatio-temporal match with TF data. buffer the viirs points, transform.
-tictoc::tic()
-viirs_nonwf <- viirs %>% 
-  filter(category != 'wildfire') %>% 
-  st_transform(st_crs(tf_2021_2022)) %>% 
-  st_buffer(375/2) 
-tictoc::toc() # 9 sec
-  
-tf_match <- f_spatiotemporal_match(viirs_nonwf, tf_2021_2022, 
-                                   'datetime', 'activity_start', 'activity_end')
-# 35 sec
-tf_match$viirs_id <- viirs_nonwf$viirs_id[tf_match$x_row]
-tf_match$tf_id <- tf_2021_2022$tf_id[tf_match$y_row]
-tf_match$x_row <- NULL
-tf_match$y_row <- NULL
-
-# make a complete data frame again
-# join back with viirs_nonwf
-viirs <- left_join(viirs %>% select(-viirs_row), 
-                  # get one row per viirs point
-                  tf_match %>% 
-                    distinct(viirs_id, tf_id, match, record_acres) %>% 
-                    group_by(viirs_id) %>% 
-                    arrange(desc(match == "spatiotemporal")) %>%
-                    slice(1) %>%
-                    ungroup())
 
 # from VIIRS perspective... -----------------------------------------------
 
-
-
-# repeat what I did in the script to prep viirs, but now with data on TF polygons
-viirs <- viirs %>% 
-  mutate(acres_per_detect = if_else(record_acres > 34.74906 | is.na(record_acres), 34.74906, record_acres)) %>% 
-  mutate(year = year(datetime), 
-         category = case_when(
-           !is.na(fire_name) ~ 'Wildfire',
-           match == 'spatial' ~ 'TF: spatial overlap',
-           match == 'spatiotemporal' ~ 'TF: spatiotemporal overlap',
-           CDL == "crop" ~ 'Crop',
-           CDL == "developed" ~ "Developed",
-           !is.na(power_source)|!is.na(solar)|!is.na(camping) ~ 'Developed', 
-           density > 40 ~ 'Developed',
-           T & month(datetime) >= 5 ~ 'Unaccounted:\nUS EPA assumed Wildfire (May-Dec)',
-           T & month(datetime) < 5 ~ 'Unaccounted:\nUS EPA assumed Rx fire (Jan-Apr)'
-         )) 
-#file_delete(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce.geojson'))
-st_write(viirs, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce.geojson'), delete_dsn = T)
-
-
-viirs_breakdown <- viirs %>% as_tibble() %>%  
+# merge task force and viirs
+viirs_breakdown <- left_join(viirs, st_drop_geometry(tf_2021_2022), by = 'tf_id') %>% 
+  mutate(acres_per_detect = if_else(record_acres > 34.74906 | is.na(record_acres), 
+                                    34.74906, record_acres)) %>% 
+  as_tibble %>% 
   group_by(category) %>% 
   summarise(n = n(),
             acres = n*34.74906,
             acres_cor = sum(acres_per_detect, na.rm = T)) %>% 
   mutate(n_percent = n/sum(n)*100, .after = n,
          area_percent = acres_cor/sum(acres_cor)*100)
+viirs_breakdown
 
-#viirs_breakdown
 
 # from TF perspective... --------------------------------------------------
 
 tf_breakdown <- tf_match %>% 
-  st_drop_geometry() %>% 
+  full_join(tf_2021_2022) %>% 
+  filter(activity_status == 'COMPLETE') %>% 
   arrange(desc(match)) %>% 
   filter(!duplicated(tf_id)) %>% 
-  full_join(tf_2021_2022) %>% 
   mutate(match = replace_na(match, 'none'), 
          year = year(activity_end)) %>% 
-  filter(activity_status == 'COMPLETE') %>% 
   group_by(match) %>% 
   summarise(n_activities = n(), 
             recorded_acres = sum(record_acres, na.rm = T),
@@ -249,8 +52,6 @@ tf_breakdown <- tf_match %>%
   #group_by(year) %>% 
   mutate(across(n_activities:gis_acres, ~ signif(.x/sum(.x)*100, 2), .names = "p_{.col}")) 
 tf_breakdown
-
-
 
 
 # treemap -----------------------------------------------------------------

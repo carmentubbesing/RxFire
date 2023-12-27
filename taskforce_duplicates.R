@@ -26,7 +26,12 @@ tf_2021_2022 <- st_read(path)
 viirs_path <- file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce.geojson')
 viirs <- st_read(viirs_path)
 
+# counties for mapping
+CA <- file.path(ref_path, 'counties/CA_Counties/CA_Counties_TIGER2016.shp') %>% st_read
+CA <- st_transform(CA, st_crs(tf_2021_2022))
 
+# crop viirs to CA
+viirs <- viirs[st_transform(CA, 4326),]
 
 # find duplicates in task force data --------------------------------------
 
@@ -49,18 +54,23 @@ tf_with_ids <- mutate(tf_2021_2022, intersects_id = intersects_id, geom_id = geo
   arrange(geom_id, field_id) %>% 
   ungroup
 
- 
-# basic facts
-tf_with_ids %>% 
-  group_by(geom_id) %>% 
-  summarise(same_geom = n(), 
-            same_fields = sum(table(field_id)[table(field_id)>1])
-            )  %>% 
-  summarise(n_activities = sum(same_geom), 
-            n_same_geom = sum(same_geom[same_geom > 1]), 
-            n_same_geom_fields = sum(same_fields)) %>% 
-  mutate(across(contains('same'), ~ .x/n_activities*100, .names = "perc_{.col}")) %>% 
-  print(width = Inf)
+# # export as a geojson
+# fs::file_delete('outputs_spatial/vector/taskforce_with_ids_2021_2022.geojson')
+# st_as_sf(tf_with_ids, sf_column_name = 'geometry') %>%
+#   st_write('outputs_spatial/vector/taskforce_with_ids_2021_2022.geojson')
+
+
+# # basic facts
+# tf_with_ids %>% 
+#   group_by(geom_id) %>% 
+#   summarise(same_geom = n(), 
+#             same_fields = sum(table(field_id)[table(field_id)>1])
+#             )  %>% 
+#   summarise(n_activities = sum(same_geom), 
+#             n_same_geom = sum(same_geom[same_geom > 1]), 
+#             n_same_geom_fields = sum(same_fields)) %>% 
+#   mutate(across(contains('same'), ~ .x/n_activities*100, .names = "perc_{.col}")) %>% 
+#   print(width = Inf)
 
 
 
@@ -69,58 +79,80 @@ tf_with_ids %>%
 
 # map out ones where there are multiple copies of the geometry, including exact copies
 # overlay viirs points on top?
-print(tf_with_ids, width = Inf)
-tf_with_ids %>% 
-  group_by(geom_id) %>% 
-  filter(any(duplicated(field_id))) %>% #, length(unique(source)) > 1) %>% 
-  filter(source == 'PFIRS') %>% 
-  select(-geometry) %>% arrange(intersects_id ) %>% view# print(width = Inf, n = 50) %>% view
-
-# export duplicates
-tf_with_ids %>% 
-  group_by(geom_id) %>% 
-  filter(any(duplicated(field_id))) %>% 
-  st_drop_geometry() %>% select(-geometry, -intersects_id) %>% ungroup %>%
-  write_csv('tmp_outputs/taskforce_duplicates.csv')
+# print(tf_with_ids, width = Inf)
+# tf_with_ids %>% 
+#   group_by(geom_id) %>% 
+#   filter(any(duplicated(field_id))) %>% #, length(unique(source)) > 1) %>% 
+#   filter(source == 'PFIRS') %>% 
+#   select(-geometry) %>% arrange(intersects_id ) %>% view# print(width = Inf, n = 50) %>% view
+# 
+# # export duplicates
+# tf_with_ids %>% 
+#   group_by(geom_id) %>% 
+#   filter(any(duplicated(field_id))) %>% 
+#   st_drop_geometry() %>% select(-geometry, -intersects_id) %>% ungroup %>%
+#   write_csv('tmp_outputs/taskforce_duplicates.csv')
 
 # check out a specific clump of intersecting polygons
+# keep_co <- c('Mendocino', 'Sonoma', "Lake", "Napa", 'Trinity', 'Humboldt', 'Del Norte')
+# keep_co <- c('Sierra', 'Yuba', 'Nevada', 'Placer', 'El Dorado')
+# CA_filt <- filter(CA, NAME %in% keep_co)
+CA_filt <- CA
 tf <- tf_with_ids %>% 
   st_as_sf(sf_column_name = 'geometry') %>% 
-  filter(geom_id == 2913) %>% 
-  select(tf_id, activity_description, broad_vegetation_type, record_acres, gis_acres, 
-         activity_start, activity_end, org_admin_t)
-bb <- bbox_buffered(tf, 0)
-tf_filt <- st_as_sf(tf_with_ids, sf_column_name = 'geometry') %>% st_intersection(bb) %>% 
+  #filter(geom_id == 2913) %>% 
+  st_intersection(CA_filt$geometry) %>% 
   select(tf_id, geom_id, activity_description, broad_vegetation_type, record_acres, gis_acres, 
          activity_start, activity_end, org_admin_t)
-dates_of_geoms <- tf_filt %>% 
+#bb <- bbox_buffered(tf, 0)
+# tf_filt <- st_as_sf(tf_with_ids, sf_column_name = 'geometry') %>% st_intersection(bb) %>% 
+#   select(tf_id, geom_id, activity_description, broad_vegetation_type, record_acres, gis_acres, 
+#          activity_start, activity_end, org_admin_t)
+dates_of_geoms <- tf %>% #tf_filt %>% 
   st_drop_geometry() %>% 
   mutate(dates = case_when(
     activity_start == activity_end ~ glue::glue("{format(as.Date(activity_end), '%m/%d/%y')}"), 
     activity_start != activity_end ~ glue::glue("{format(as.Date(activity_start), '%m/%d')}-{format(as.Date(activity_end), '%m/%d/%y')}")
   )) %>% 
   group_by(geom_id) %>% 
-  summarise(dates = paste(dates, collapse = ', '),
+  summarise(tf_ids = paste(tf_id, collapse = ', '),
+            dates = paste(dates, collapse = ', '),
             record_acres = paste(record_acres, collapse = ', ')) 
-print(dates_of_geoms, n = Inf)
-tf_filt <- tf_filt %>% 
+# print(dates_of_geoms, n = Inf)
+tf <- tf %>% 
   distinct(geom_id, activity_description, gis_acres, org_admin_t, geometry) %>% 
   left_join(dates_of_geoms)
 
 viirs_filt <- viirs %>% 
-  st_intersection(bbox_buffered(tf, 0) %>% st_transform(st_crs(viirs))) %>% 
+  #st_intersection(CA_filt$geometry %>% st_transform(st_crs(viirs))) %>% 
   select(datetime, category, tf_id, record_acres) %>% 
-  filter(category != 'Wildfire') %>% 
+  filter(!category %in% c('Wildfire', 'Crop', 'Developed')) %>% 
   mutate(category = case_when(
     grepl('Rx', category) ~ 'Unaccounted: US EPA assumed Rx fire',
     grepl('Wildfire', category) ~ 'Unaccounted: US EPA assumed wildfire',
     T ~ category
   ))
 
+f_p <- function(pal){
+  pal <- sample(pal)
+  plot(1:length(pal), col = pal, cex = 4, pch = 16)
+}
+f_p(wesanderson::wes_palette('Zissou1'))
+f_p(viridis::plasma(5))
+
+harrypotter::hp_palettes('ronweasley')
+harrypotter::hp(5)
 
 #mapview(tf, zcol = 'source', alpha.regions = .1, col.regions= sample(wesanderson::wes_palette('Zissou1')), legend = F ) +
-  mapview(tf_filt, zcol = 'org_admin_t', alpha.regions = .5, col.regions= sample(c("#E2D200", "#DD8D29")), legend = F ) +
+my_map <- mapview(tf, zcol = 'org_admin_t', alpha.regions = .5, lwd = .5, col.regions= viridis::plasma(7), legend = F ) +
   mapview(viirs_filt, zcol = 'category', layer.name = 'VIIRS', 
           col.regions = c( '#5BBCD6', '#FF0000', 'grey30', 'grey30'))
+
+mapshot(my_map, "tmp_outputs/tf_vs_viirs_all_CA_2021_2022.html")
+
 print(st_drop_geometry(tf), width = Inf, n = Inf) 
 print(st_drop_geometry(tf_filt), width = Inf, n = Inf)
+
+
+
+
