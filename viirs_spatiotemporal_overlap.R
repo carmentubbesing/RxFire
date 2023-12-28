@@ -26,6 +26,7 @@ pfirs_filt <- pfirs_filt %>%
 # import VIIRS
 viirs_path <- file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_extracted.geojson')
 viirs <- st_read(viirs_path)
+viirs <- viirs[st_transform(CA, 4326),]
 
 # make viirs time PST
 viirs <- viirs %>% 

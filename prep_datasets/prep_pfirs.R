@@ -2,6 +2,10 @@ library(fs)
 library(tidyverse)
 library(sf)
 
+# CA shapefile
+CA <- file.path(ref_path, 'CA boundary/ca-state-boundary/CA_State_TIGER2016.shp')
+CA <- st_read(CA)
+
 pfirs <- readxl::read_xlsx(file.path(ref_path, 'PFIRS/PFIRS 2017-2022 pulled 2023.xlsx')) %>% 
   janitor::clean_names()
 pfirs_filt <- pfirs %>% 
@@ -21,3 +25,7 @@ pfirs_filt <- pfirs %>%
   mutate(pfirs_id = 1:nrow(.), .before = burn_date)
 st_write(obj = pfirs_filt, file.path(ref_path, 'PFIRS/PFIRS_cleaned_2021_2022.geojson'), 
          delete_dsn = T)
+
+pfirs_filt %>% 
+  as_tibble %>% 
+  write_csv(file.path(ref_path, 'PFIRS/PFIRS_cleaned_2021_2022.csv'))

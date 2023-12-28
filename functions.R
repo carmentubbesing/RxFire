@@ -1,3 +1,9 @@
+plot_pal <- function(pal){
+  df <- tibble(color = pal, x = 1:length(pal))
+  ggplot(df, aes(x, fill = color)) +
+    geom_bar() +
+    scale_fill_manual(values = pal)
+}
 
 bbox_buffered <- function(spatial_df, buffer = 1000){
   

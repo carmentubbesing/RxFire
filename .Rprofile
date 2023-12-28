@@ -7,10 +7,14 @@ reference_path_Carmen <- "C:/Users/ctubbesi/OneDrive - California Air Resources 
 # Lisa's local path
 reference_path_Lisa <- "C:/Users/lrosenth/OneDrive - California Air Resources Board/Desktop/Local_reference_data"
 
+shared_path_Lisa <- "C:/Users/lrosenth/OneDrive - California Air Resources Board/EIAS/NWL/Wildfire & Rx Fire/"
+
 # detect who's directory exists and use that one.
 if(fs::dir_exists(reference_path_Lisa)){
   ref_path <- reference_path_Lisa
   message("this is your reference path (`ref_path`) --> ", ref_path)
+  shared_path <- shared_path_Lisa
+  message("this is your path to save shared files (`shared_path`) --> ", shared_path)
 } else{
   if(fs::dir_exists(reference_path_Carmen)){
     ref_path <- reference_path_Carmen
@@ -21,3 +25,4 @@ if(fs::dir_exists(reference_path_Lisa)){
 
 rm(reference_path_Carmen)
 rm(reference_path_Lisa)
+rm(shared_path_Lisa)

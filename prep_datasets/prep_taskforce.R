@@ -33,8 +33,8 @@ tf_polys <- st_read(path, lyrs$name[2]) %>%
          .before = everything()) %>% 
   mutate(across(.cols = c(ACTIVITY_END, ACTIVITY_START, PROJECT_START, PROJECT_END,
                           TREATMENT_START, TREATMENT_END), ~ as.Date(.x)))
-# st_drop_geometry(tf_points) %>% write_csv('tmp_outputs/full_tf_points.csv')
-# st_drop_geometry(tf_polys) %>% write_csv('tmp_outputs/full_tf_polygons.csv')
+# st_drop_geometry(tf_points) %>% write_csv(file.path(ref_path, 'task force/full_tf_points.csv'))
+# st_drop_geometry(tf_polys) %>% write_csv(file.path(ref_path, 'task force/full_tf_polygons.csv'))
 
 
 # clean it up and only keep Rx fire activity ------------------------------
