@@ -48,21 +48,10 @@ viirs_nonwf <- viirs %>%
 
 # match viirs with task force
 tf_match <- f_spatiotemporal_match(viirs_nonwf, tf_2021_2022, 
-                                   'datetime', 'activity_start', 'activity_end')
-# 35 sec
-tf_match$viirs_id <- viirs_nonwf$viirs_id[tf_match$x_row]
-tf_match$tf_id <- tf_2021_2022$tf_id[tf_match$y_row]
-tf_match$x_row <- NULL
-tf_match$y_row <- NULL
-
+                                   'activity_start', 'activity_end')
 
 # match viirs with pfirs
-pfirs_match <- f_spatiotemporal_match(viirs_nonwf, pfirs_filt, 
-                                      'datetime', 'burn_date')
-pfirs_match$viirs_id <- viirs_nonwf$viirs_id[pfirs_match$x_row]
-pfirs_match$pfirs_id <- pfirs_filt$pfirs_id[pfirs_match$y_row]
-pfirs_match$x_row <- NULL
-pfirs_match$y_row <- NULL
+pfirs_match <- f_spatiotemporal_match(viirs_nonwf, pfirs_filt, 'burn_date')
 
 # combine matches, join back with rest of viirs
 priortize_spatiotemporal <- function(df){
@@ -76,8 +65,12 @@ priortize_spatiotemporal <- function(df){
 tf_match <- select(tf_match, viirs_id, match, tf_id)
 pfirs_match <- select(pfirs_match, viirs_id, match, pfirs_id)
 viirs_matches <- full_join(priortize_spatiotemporal(tf_match), 
-                           priortize_spatiotemporal(pfirs_match)) %>% 
-  priortize_spatiotemporal
+          priortize_spatiotemporal(pfirs_match)) %>% 
+  group_by(viirs_id) %>% 
+  mutate(across(c(tf_id, pfirs_id), ~ first(.x, na_rm = T))) %>% 
+  priortize_spatiotemporal()
+
+
 
 
 # export things -----------------------------------------------------------
@@ -87,22 +80,48 @@ write_csv(viirs_matches, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce
 write_csv(tf_match, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_matches.csv'))
 write_csv(pfirs_match, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_pfirs_matches.csv'))
 
-# viirs with matches
-viirs <- viirs %>% left_join(viirs_matches) %>% 
-  mutate(year = year(datetime), 
-         category = case_when(
-           !is.na(fire_name) ~ 'Wildfire',
-           match == 'spatial' ~ 'Spatial overlap',
-           match == 'spatiotemporal' ~ 'Spatiotemporal overlap',
-           CDL == "crop" ~ 'Crop',
-           CDL == "developed" ~ "Developed",
-           !is.na(power_source)|!is.na(solar)|!is.na(camping) ~ 'Developed-artifactual', 
-           density > 40 ~ 'Developed-artifactual',
-           T & month(datetime) >= 5 ~ 'Unaccounted:\nUS EPA assumed Wildfire (May-Dec)',
-           T & month(datetime) < 5 ~ 'Unaccounted:\nUS EPA assumed Rx fire (Jan-Apr)'
-         )) 
-
-st_write(viirs, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_pfirs.geojson'), delete_dsn = T)
+# # read these in
+# viirs_matches <- read_csv(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_pfirs_matches.csv'))
+# tf_match <- read_csv(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_matches.csv'))
+# pfirs_match <- read_csv(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_pfirs_matches.csv'))
 
 
+# update categories
+viirs_categories <- st_drop_geometry(viirs) %>% 
+  select(viirs_id, fire_name, CDL, power_source, solar, camping, density, datetime, category)
+category_tf <- viirs_categories %>% 
+  left_join(priortize_spatiotemporal(tf_match)) %>% 
+  update_category %>%
+  rename(category_tf = category)
+category_pfirs <- viirs_categories %>% 
+  left_join(priortize_spatiotemporal(pfirs_match)) %>% 
+  update_category %>%
+  rename(category_pfirs = category)
+category <- viirs_categories %>% 
+  left_join(priortize_spatiotemporal(viirs_matches)) %>% 
+  update_category %>%
+  rename(category = category)
+
+res <- viirs %>% 
+  select(-category) %>% 
+  left_join(category_tf) %>%
+  left_join(category_pfirs) %>%
+  left_join(category) %>% 
+  relocate(category_tf, category_pfirs, .after = category) %>% 
+  mutate(year = year(datetime))
+
+
+st_write(res, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_pfirs.geojson'), delete_dsn = T)
+
+
+
+
+
+
+
+res$category %>% unique
+as_tibble(res) %>% 
+  count(category_tf)
+as_tibble(res) %>% 
+  count(category)
 

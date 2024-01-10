@@ -59,8 +59,14 @@ viirs <- viirs %>%
 
 # add a raster of land use/land cover?
 rasts <- terra::rast('outputs_spatial/raster/extract_viirs.tif')
-#rasts_crop <- crop(rasts, districts[districts$NAME == 'Glenn',] %>% st_transform(st_crs(rasts)))
 
+# add option for wildfire perimeters too
+wf <- st_read(file.path(ref_path, 'FRAP/fire221gdb/fire22_1.gdb'), layer = 'firep22_1')
+wf_cleaned <- wf %>% 
+  janitor::clean_names() %>% 
+  filter(year(as.Date(alarm_date)) %in% c(2021, 2022)) %>% 
+  st_make_valid() %>% 
+  st_transform(4326)
 
 # group records by geometry -----------------------------------------------
 
@@ -153,134 +159,161 @@ districts <- st_transform(districts, 4326)
 #layers$nei <- st_transform(nei_collapsed, 4326)
 
 # filter by district for testing
-district <- filter(districts, NAME == 'Mendocino')
-layers_filt <- map(layers, ~ .x[district,])
+district <- filter(districts, NAME == 'Bay Area')
+layers_filt <- map(layers, ~ .x[district,], .progress = T)
 viirs_filt <- viirs[district,]
-viirs_filt$category %>% unique
+rasts_crop <- crop(rasts, districts[districts$NAME == 'Bay Area',] %>% 
+                     st_transform(st_crs(rasts)))
 
 
 # color palettes
 harrypotter::hp_palettes
 plot_pal(harrypotter::harrypotter(4, option = 'ronweasley2'))
-viirs_pal <- colorFactor(c( '#5BBCD6', '#FF0000', '#2ECC71', 'grey30', 'grey30'), viirs$category)
+viirs_pal <- colorFactor(c( '#5BBCD6', '#FF0000', '#2ECC71', 'black', 'black'), viirs$category)
 layers_pal <- colorFactor(harrypotter::harrypotter(4, option = 'ronweasley2'), layer_names[1:4])
 layer_labels <- c("NEI (2022 only)", "PFIRS", "Task Force (non-PFIRS)", "Task Force (PFIRS)")
 raster_labels <- levels(rasts$CDL)[[1]][,2]
 rast_pal <- colorFactor(c('green4', '#A569BD', '#F7DC6F', '#D6EAF8'), values(rasts$CDL))
+raster_labels2 <- levels(rasts$SRA)[[1]][,2]
+rast_pal2 <- colorFactor(c('green4', '#A569BD', '#F7DC6F'), values(rasts$SRA))
 
-
-# map it!
-map_polygons <- leaflet() %>% 
-  # base maps
-  addProviderTiles(providers$CartoDB.Positron, group = 'street') %>%
-  addProviderTiles(providers$Esri.WorldImagery, group = 'satellite') %>%
-  addProviderTiles(providers$OpenTopoMap, group = 'topo') %>%
-  # add markers
-  addMarkers(data = layers$stations, group = 'stations', icon = station_icon,
-             popup = ~ paste("<b>siteID: </b> ", site_id, "<br>",
-                             "<b>site name: </b> ", site_name, "<br>"),
-             clusterOptions = markerClusterOptions(spiderfyOnMaxZoom = T)) %>%
-  # add polygons
-  addPolygons(data = layers$nei, group = 'NEI', 
-              color = layers_pal('nei'), fillOpacity = .2,
-              popup = ~ paste("<b>dataset:</b> ", "NEI", "<br>",
-                              "<b>id:</b> ", geom_id, "<br>",
-                              "<b>Rx fire:</b> ", rx, "<br>",
-                              '<b>event name:</b> ', event_name, "<br>",
-                              '<b>dates:</b> ', dates, "<br>",
-                              '<b>acres:</b> ', acres_values, "<br>",
-                              '<b>sources:</b> ', sources, "<br>"),
-              highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
-                                                  bringToFront = F)) %>% 
-  addPolygons(data = layers$pfirs, group = 'PFIRS', 
-              color = layers_pal('pfirs'),
-              popup = ~ paste("<b>dataset:</b> ", "PFIRS", "<br>",
-                              "<b>pfirs_ids:</b> ", pfirs_ids, "<br>",
-                              "<b>n_records:</b> ", n_records, "<br>",
-                              "<b>agency:</b> ", agency, "<br>",
-                              '<b>burn unit:</b> ', burn_unit, "<br>",
-                              '<b>dates:</b> ', dates, "<br>",
-                              '<b>acres:</b> ', acres_values, "<br>",
-                              '<b>sum acres:</b> ', sum_acres, "<br>"),
-              highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
-                                                  bringToFront = F)) %>% 
-  addPolygons(data = layers$tf_nopfirs, group = 'Task Force (non-PFIRS)', 
-              color = layers_pal('tf_nopfirs'),
-              popup = ~ paste("<b>dataset:</b> ", "Task Force (non-PFIRS)", "<br>",
-                              "<b>tf_ids:</b> ", tf_ids, "<br>",
-                              "<b>org:</b> ", organization, "<br>",
-                              '<b>project name:</b> ', project_name, "<br>",
-                              '<b>dates:</b> ', dates, "<br>",
-                              '<b>acres:</b> ', acres_values, "<br>",
-                              '<b>sum acres:</b> ', sum_acres, "<br>"),
-              highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
-                                                  bringToFront = F)) %>% 
-  addPolygons(data = layers$tf_pfirs, group = 'Task Force (PFIRS)',
-            color = layers_pal('tf_pfirs'),
-            popup = ~ paste("<b>dataset:</b> ", "Task Force (PFIRS)", "<br>",
-                            "<b>tf_ids:</b> ", tf_ids, "<br>",
-                            "<b>org:</b> ", organization, "<br>",
-                            '<b>project name:</b> ', project_name, "<br>",
-                            '<b>dates:</b> ', dates, "<br>",
-                            '<b>acres:</b> ', acres_values, "<br>",
-                            '<b>sum acres:</b> ', sum_acres, "<br>"),
-            highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
-                                                bringToFront = F)) %>% 
-  # add legend
-  addLegend(pal = layers_pal, values=  layer_names[1:4], 
-            labFormat = function(type, cuts) paste0(layer_labels),
-            opacity = 1,
-            title = 'Rx fire layers', position = 'bottomleft') 
-
-# add district boundaries
-map_polygons <- map_polygons %>% 
-  addPolygons(data = districts, fill = NA, label = ~ paste('Air District: ', NAME),
-              highlightOptions = highlightOptions(color = "white", weight = 4, 
-                                                  bringToFront = F)) 
+map_this_bad_boy <- function(layers, rasters, viirs){
+  # map it!
+  map_polygons <- leaflet() %>% 
+    # base maps
+    addProviderTiles(providers$CartoDB.Positron, group = 'street') %>%
+    addProviderTiles(providers$Esri.WorldImagery, group = 'satellite') %>%
+    addProviderTiles(providers$OpenTopoMap, group = 'topo') %>%
+    # add markers
+    addMarkers(data = layers$stations, group = 'stations', icon = station_icon,
+               popup = ~ paste("<b>siteID: </b> ", site_id, "<br>",
+                               "<b>site name: </b> ", site_name, "<br>"),
+               clusterOptions = markerClusterOptions(spiderfyOnMaxZoom = T)) %>%
+    # add polygons
+    addPolygons(data = layers$nei, group = 'NEI', 
+                color = layers_pal('nei'), fillOpacity = .2,
+                popup = ~ paste("<b>dataset:</b> ", "NEI", "<br>",
+                                "<b>id:</b> ", geom_id, "<br>",
+                                "<b>Rx fire:</b> ", rx, "<br>",
+                                '<b>event name:</b> ', event_name, "<br>",
+                                '<b>dates:</b> ', dates, "<br>",
+                                '<b>acres:</b> ', acres_values, "<br>",
+                                '<b>sources:</b> ', sources, "<br>"),
+                highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
+                                                    bringToFront = F)) %>% 
+    addPolygons(data = layers$pfirs, group = 'PFIRS', 
+                color = layers_pal('pfirs'),
+                popup = ~ paste("<b>dataset:</b> ", "PFIRS", "<br>",
+                                "<b>pfirs_ids:</b> ", pfirs_ids, "<br>",
+                                "<b>n_records:</b> ", n_records, "<br>",
+                                "<b>agency:</b> ", agency, "<br>",
+                                '<b>burn unit:</b> ', burn_unit, "<br>",
+                                '<b>dates:</b> ', dates, "<br>",
+                                '<b>acres:</b> ', acres_values, "<br>",
+                                '<b>sum acres:</b> ', sum_acres, "<br>"),
+                highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
+                                                    bringToFront = F)) %>% 
+    addPolygons(data = layers$tf_nopfirs, group = 'Task Force (non-PFIRS)', 
+                color = layers_pal('tf_nopfirs'),
+                popup = ~ paste("<b>dataset:</b> ", "Task Force (non-PFIRS)", "<br>",
+                                "<b>tf_ids:</b> ", tf_ids, "<br>",
+                                "<b>org:</b> ", organization, "<br>",
+                                '<b>project name:</b> ', project_name, "<br>",
+                                '<b>dates:</b> ', dates, "<br>",
+                                '<b>acres:</b> ', acres_values, "<br>",
+                                '<b>sum acres:</b> ', sum_acres, "<br>"),
+                highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
+                                                    bringToFront = F)) %>% 
+    addPolygons(data = layers$tf_pfirs, group = 'Task Force (PFIRS)',
+                color = layers_pal('tf_pfirs'),
+                popup = ~ paste("<b>dataset:</b> ", "Task Force (PFIRS)", "<br>",
+                                "<b>tf_ids:</b> ", tf_ids, "<br>",
+                                "<b>org:</b> ", organization, "<br>",
+                                '<b>project name:</b> ', project_name, "<br>",
+                                '<b>dates:</b> ', dates, "<br>",
+                                '<b>acres:</b> ', acres_values, "<br>",
+                                '<b>sum acres:</b> ', sum_acres, "<br>"),
+                highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
+                                                    bringToFront = F)) %>% 
+    # add legend
+    addLegend(pal = layers_pal, values= layer_names[1:4], 
+              labFormat = function(type, cuts) paste0(layer_labels),
+              opacity = 1,
+              title = 'Rx fire layers', position = 'bottomleft') 
   
-# add land cover raster 
-map_raster <- map_polygons %>% 
-  addRasterImage(rasts$CDL, opacity = .5, colors = rast_pal, group = 'Land Type') %>% 
-  addLegend(pal = rast_pal, values =values(rasts$CDL), opacity = .9,
-            labFormat = function(type, cuts) paste0(raster_labels),
-            title = 'land type', position = 'bottomleft') %>% 
-  hideGroup('Land Type')
+  # add district boundaries
+  map_polygons <- map_polygons %>% 
+    addPolygons(data = districts, fill = NA, label = ~ paste('Air District: ', NAME),
+                highlightOptions = highlightOptions(color = "white", weight = 4, 
+                                                    bringToFront = F)) 
+  # add wildfire perimeters
+  map_polygons <- map_polygons %>% 
+    addPolygons(data = wf_cleaned, fill = NA, color = 'red', weight = 2, opacity = 1,
+                popup = ~ paste("<b>dataset:</b> ", "FRAP wildfires", "<br>",
+                                '<b>Fire Name:</b> ', fire_name, "<br>",
+                                '<b>Start Date:</b> ', as.Date(alarm_date), "<br>",
+                                '<b>End Date:</b> ', as.Date(cont_date), "<br>"),
+                highlightOptions = highlightOptions(color = "pink", weight = 5, 
+                                                    bringToFront = F)) 
+  # add land cover raster 
+  map_raster <- map_polygons %>% 
+    addRasterImage(rasters$CDL, opacity = .5, colors = rast_pal, group = 'Land Type') %>% 
+    addRasterImage(rasters$SRA, opacity = .5, colors = rast_pal, group = 'Land Ownership') %>% 
+    addLegend(pal = rast_pal, values =values(rasts$CDL), opacity = .9, group = 'Land Type',
+              labFormat = function(type, cuts) paste0(raster_labels),
+              title = 'land type', position = 'bottomleft') %>% 
+    addLegend(pal = rast_pal2, values =values(rasts$SRA), opacity = .9, group = 'Land Ownership',
+              labFormat = function(type, cuts) paste0(raster_labels2),
+              title = 'land ownership', position = 'bottomleft') %>% 
+    hideGroup('Land Type') %>% 
+    hideGroup('Land Ownership')
+  
+  # add viirs to it
+  map_all <- map_raster %>% 
+    addCircleMarkers(data = viirs, group = 'VIIRS', 
+                     color = ~ viirs_pal(category), stroke = F, 
+                     radius = 5, fillOpacity = .7, 
+                     popup = ~ paste("<b>dataset:</b> ", "VIIRS", "<br>",
+                                     "<b>viirs_id:</b> ", viirs_id, "<br>",
+                                     "<b>tf_id:</b> ", tf_id, "<br>",
+                                     "<b>pfirs_id:</b> ", pfirs_id, "<br>",
+                                     "<b>date:</b> ", acq_date, "<br>",
+                                     "<b>category:</b> ", category, "<br>"),
+                     #highlightOptions = highlightOptions(color = "turquoise", weight = 4, bringToFront = F)
+    ) %>% 
+    addLegend(pal = viirs_pal, values = viirs$category, group = 'VIIRS', opacity = .9,
+              title = 'VIIRS', position = 'bottomleft') %>%
+    addLayersControl(
+      baseGroups = c("street", "satellite", "topo"), 
+      overlayGroups = c('Land Type', 'Land Ownership', 'stations', 'PFIRS', "Task Force (non-PFIRS)", "Task Force (PFIRS)", 'NEI', 'VIIRS'),
+      options = layersControlOptions(collapsed = T) 
+    ) %>% 
+    # add scale bar
+    addScaleBar(position = 'bottomright', options = scaleBarOptions(
+      maxWidth = 200, metric = T, imperial = T, updateWhenIdle = T
+    ))
+  
+  return(map_all)
+}
 
-# add viirs to it
-map_all <- map_raster %>% 
-  addCircleMarkers(data = viirs, group = 'VIIRS', 
-             color = ~ viirs_pal(category), stroke = F, 
-             radius = 5, fillOpacity = .7, 
-             popup = ~ paste("<b>dataset:</b> ", "VIIRS", "<br>",
-                             "<b>viirs_id:</b> ", viirs_id, "<br>",
-                             "<b>tf_id:</b> ", tf_id, "<br>",
-                             "<b>pfirs_id:</b> ", pfirs_id, "<br>",
-                             "<b>date:</b> ", acq_date, "<br>",
-                             "<b>category:</b> ", category, "<br>"),
-             #highlightOptions = highlightOptions(color = "turquoise", weight = 4, bringToFront = F)
-             ) %>% 
-  addLegend(pal = viirs_pal, values = viirs$category, opacity = .9,
-            title = 'VIIRS', position = 'bottomleft') %>%
-  addLayersControl(
-    baseGroups = c("street", "satellite", "topo"), 
-    overlayGroups = c('Land Type', 'stations', 'PFIRS', "Task Force (non-PFIRS)", "Task Force (PFIRS)", 'NEI', 'VIIRS'),
-    options = layersControlOptions(collapsed = T)
-  ) %>% 
-  # add scale bar
-  addScaleBar(position = 'bottomright', options = scaleBarOptions(
-    maxWidth = 200, metric = T, imperial = T, updateWhenIdle = T
-  ))
-map_all
+smaller_map <- map_this_bad_boy(layers_filt, rasts_crop, viirs_filt)
+smaller_map 
+big_map <- map_this_bad_boy(layers, rasts, viirs)
+big_map
 
 
 
 # export things -----------------------------------------------------------
 # save map
 expath_map <- file.path(shared_path, 'Lisa_VIIRS_vs_RxFire/mapleaflet_all_data_2021_2022.html')
-mapshot(map_all, expath_map)
+mapshot(big_map, expath_map)
 
 # save datasets
 nei %>% st_drop_geometry() %>% write_csv(file.path(ref_path, 'US EPA/nei_2022_cleaned.csv'))
 # pfirs already saved
 # tf already saved
 
+export_viirs <- st_read(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_pfirs.geojson')) %>% 
+  as_tibble()
+export_viirs %>% 
+  write_csv(file.path(shared_path, 'Lisa_VIIRS_vs_RxFire/datasets/viirs_with_tf_pfirs_matches_2021_2022.csv'))

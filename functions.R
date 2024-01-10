@@ -28,7 +28,11 @@ acres_to_radius <- function(x){
   return(r)
 }
 
-f_spatiotemporal_match <- function(x, y,  x_date, y_start, y_end = NULL){
+f_spatiotemporal_match <- function(x, y,   y_start, y_end = NULL, x_date = 'datetime', x_id = 'viirs_id'){
+  
+  # x = typically viirs sf dataframe
+  # y = typically agency sf dataframe
+  # assumes that x and y have id columns
   
   # make sure crs of x and y are the same
   test <- st_crs(x) == st_crs(y)
@@ -68,5 +72,135 @@ f_spatiotemporal_match <- function(x, y,  x_date, y_start, y_end = NULL){
   res <- map2_df(int_df$x_row, int_df$y_row, f_overlap, .progress = T)
   tictoc::toc()
   
+  # change x_row to IDs. y_id is already there.
+  res <- res %>% 
+    mutate(x_id = pull(x, x_id)[x_row],
+           .after = match,
+           x_row = NULL, y_row = NULL) %>% 
+    rename({{x_id}} := x_id)
+
+  
   return(res)
+} 
+
+# viirs with matches
+update_category <- function(viirs_extracted){
+  viirs_extracted %>% 
+    mutate(category = case_when(
+      !is.na(fire_name) ~ 'Wildfire',
+      match == 'spatial' ~ 'Spatial overlap',
+      match == 'spatiotemporal' ~ 'Spatiotemporal overlap',
+      CDL == "crop" ~ 'Crop',
+      CDL == "developed" ~ "Developed",
+      !is.na(power_source)|!is.na(solar)|!is.na(camping) ~ 'Developed-artifactual', 
+      density > 40 ~ 'Developed-artifactual',
+      T & month(datetime) >= 5 ~ 'Unaccounted:\nUS EPA assumed Wildfire (May-Dec)',
+      T & month(datetime) < 5 ~ 'Unaccounted:\nUS EPA assumed Rx fire (Jan-Apr)'
+    )) %>% 
+    select(contains('id'), category)
+}
+
+
+
+# write a function so you can do this for different buffer sizes
+calculate_overlap_buffer <- function(agency_records, viirs_nonwf, buffer_amount, acres_field, 
+                                     agency_start, agency_end = NULL, return_dfs = F){
+  
+  
+  # delete me
+  # agency_records = tf_2021_2022
+  # buffer_amount = 0
+  # acres_field = 'record_acres'
+  # agency_start = 'activity_start'
+  # agency_end = 'activity_end'
+  # 
+  # buffer pfirs
+  agency_buffered <- agency_records %>% 
+    st_buffer(buffer_amount)
+  
+  
+  # check for a spatio-temporal match with pfirs.
+  match_df <- f_spatiotemporal_match(viirs_nonwf, agency_buffered, agency_start, agency_end) %>% 
+    select(1:3, all_of(acres_field)) %>% 
+    distinct %>% 
+    arrange(desc(match == "spatiotemporal")) 
+  
+  # join back with viirs_nonwf
+  viirs_match <- left_join(viirs_nonwf, 
+                           # get one row per viirs point
+                           match_df %>% 
+                             group_by(viirs_id) %>% 
+                             slice(1) %>%
+                             ungroup())
+  
+  # join back with PFIRS
+  col_name <- names(match_df)[3]
+  agency_match <- left_join(mutate(agency_buffered, buffer_radius = buffer_amount), 
+                            # get one row per pfirs point
+                            match_df %>% 
+                              group_by(.data[[col_name]]) %>% 
+                              slice(1) %>%
+                              ungroup()
+  )
+  
+  # calculate overlap summaries
+  
+  # from VIIRS perspective
+  viirs_summary <- viirs_match %>% 
+    st_drop_geometry() %>% 
+    # update the categories
+    update_category() %>% 
+    # filter out development and crop
+    filter(category %in% c('Unaccounted:\nUS EPA assumed Rx fire (Jan-Apr)', 
+                           'Unaccounted:\nUS EPA assumed Wildfire (May-Dec)',
+                           'Spatial overlap',
+                           'Spatiotemporal overlap')) %>% 
+    # change names of categories
+    mutate(category = case_when(
+      category == 'Spatial overlap' ~ 'spatial',
+      category == 'Spatiotemporal overlap' ~ 'spatiotemporal',
+      TRUE ~ 'no_match'
+    )) %>%
+    count(category) %>% 
+    mutate(acresV = n*34.7)
+  
+  # from agency's perspective
+  agency_summary <- agency_match %>% 
+    st_drop_geometry() %>% 
+    mutate(match = replace_na(match, 'no_match')) %>% 
+    group_by(match) %>% 
+    summarise(n = n(),
+              acresA =  sum(across(all_of(acres_field)), na.rm = T)
+    ) %>% 
+    rename(category = match)
+  
+  # merge summaries together. 
+  # acresV = estimates acreage by multiplying # viirs points by 34.7 acres
+  # acresA = acres burned according to records in agency's df
+  merged_summary <- bind_rows(
+    viirs_summary %>% mutate(source = 'VIIRS', .before = category),
+    agency_summary %>% mutate(source = 'Agency', .before = category)
+  ) %>% 
+    # refactor category
+    mutate(category = factor(category, levels = c('spatiotemporal', 'spatial', 'no_match'))) %>% 
+    arrange(source, category)
+  # make acresV = acresP when category == spatiotemporal
+  merged_summary$acresV[merged_summary$category == 'spatiotemporal' & merged_summary$source == 'Agency'] <- 
+    merged_summary$acresV[merged_summary$category == 'spatiotemporal' & merged_summary$source == 'VIIRS']
+  merged_summary$acresA[merged_summary$category == 'spatiotemporal' & merged_summary$source == 'VIIRS'] <- 
+    merged_summary$acresA[merged_summary$category == 'spatiotemporal' & merged_summary$source == 'Agency']
+  # get percentages
+  merged_summary <- merged_summary %>% 
+    mutate(acresV = coalesce(acresV, acresA), 
+           acresA = coalesce(acresA, acresV) 
+    ) %>% 
+    group_by(source) %>% 
+    mutate(across(c(n, acresV, acresA), ~ get_perc(.x), .names = '{.col}_perc')) %>% 
+    ungroup() 
+  
+  if(return_dfs){
+    return(list(merged_summary, viirs_match = viirs_match, agency_match = agency_match))
+  }else{
+    return(merged_summary)
+  }
 }
