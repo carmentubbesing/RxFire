@@ -155,6 +155,7 @@ Layers you might want are...
 - campgrounds (points)
 - power plants (points)
 - solar farms (polygons)
+- landfills (polygons)
 
 Make sure the data is valid and buffer by the VIIRS resolution divided by 2. Put into a list and export. 
 
@@ -199,13 +200,17 @@ solar <- file.path(ref_path, 'solar')%>% dir_ls(glob = "*geojson") %>% st_read
 solar_valid <- prep_polys(solar, "Combined_Class") %>% 
   st_buffer(radius)
 
-
+# landfills--from https://gis.data.ca.gov/datasets/OEHHA::landfillboundaries/explore, link from Amy Klug
+landfills <- file.path(ref_path, 'landfills') %>% dir_ls(glob = "*shp") %>% st_read
+landfills_valid <- prep_polys(landfills, c('SiteName', "FacIT_ID")) %>% 
+  st_buffer(radius)
 
 # functions to extract data at VIIRS points ============
 vector_layers <- list(counties = counties_valid, 
      camping = camping_valid,
      powerplants = powerplants_valid, 
-     solar = solar_valid)
+     solar = solar_valid, 
+     landfills = landfills_valid)
 
 
 ```

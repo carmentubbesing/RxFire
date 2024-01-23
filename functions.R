@@ -92,8 +92,10 @@ update_category <- function(viirs_extracted){
       match == 'spatiotemporal' ~ 'Spatiotemporal overlap',
       CDL == "crop" ~ 'Crop',
       CDL == "developed" ~ "Developed",
-      !is.na(power_source)|!is.na(solar)|!is.na(camping) ~ 'Developed-artifactual', 
-      density > 40 ~ 'Developed-artifactual',
+      !is.na(power_source)|!is.na(solar)|!is.na(camping)|!is.na(landfill_nm) ~ 'Developed-artifactual', 
+      density_2021 > 20 ~ 'Developed-artifactual',
+      density_2022 > 20 ~ 'Developed-artifactual',
+      CDL == 'other' ~ 'Developed-artifactual',
       T & month(datetime) >= 5 ~ 'Unaccounted:\nUS EPA assumed Wildfire (May-Dec)',
       T & month(datetime) < 5 ~ 'Unaccounted:\nUS EPA assumed Rx fire (Jan-Apr)'
     )) %>% 

@@ -48,13 +48,14 @@ vector_layers <- read_rds('outputs_spatial/vector/extract_viirs.rds')
 rasts <- rast('outputs_spatial/raster/extract_viirs.tif')
 
 # import VIIRS
-viirs <- dir_ls(file.path(ref_path, 'viirs/CA_2021_2022'), glob = '*.csv', recurse = T) %>% 
-  map(read_csv)
+viirs_paths <- dir_ls(file.path(ref_path, 'viirs/CA_2021_2022'), glob = '*.csv', recurse = T)[1:3] 
+viirs <- map(viirs_paths, read_csv)
 viirs <- map2_df(viirs, c('J1V', 'SV', 'SV'),
      ~ select(.x, -version) %>% 
        mutate(satellite = .y)) 
 # make into sf object
 viirs <- st_as_sf(viirs, coords = c('longitude', 'latitude'), crs = 4326)
+
 
 # extract attributes at VIIRS points --------------------------------------
 
@@ -66,12 +67,13 @@ extracted_rasters$ID <- NULL
 vector_names <- list(c("county"),
                      c("camping"),
                      c("power_source", 'power_capacity'),
-                     c("solar"))
+                     c("solar"), 
+                     c('landfill_nm', 'landfill_id'))
 tictoc::tic()
 extracted_vectors <- map(vector_layers, ~ extract_polys(.x, st_transform(viirs, st_crs(rasts)))) %>% 
   map2(., vector_names, ~ set_names(.x, .y)) %>% 
   bind_cols
-tictoc::toc() # 26.6sec
+tictoc::toc() # 43 sec
 
 
 
@@ -80,11 +82,14 @@ tictoc::toc() # 26.6sec
 # rid VIIRS detects that are likely picking up stationary, artifactual fires
 # create a density raster and remove points > 20 points annually (McClure et al. 2023, same method as NEI)
 
-viirs_density <- rasterize(st_transform(viirs, st_crs(rasts)), rasts$SRA,
-                           fun = 'length', background = 0)
-extracted_viirs_density <- terra::extract(x = viirs_density, st_transform(viirs, st_crs(rasts)))
-extracted_viirs_density$ID <- NULL 
-names(extracted_viirs_density) <- 'density'
+# split viirs by year, calculate density for each point, join back. 
+viirs_density <- group_split(viirs, year(acq_date)) %>% 
+  map(~ rasterize(st_transform(.x, st_crs(rasts)), rasts$SRA,
+                  fun = 'length', background = 0)) %>% 
+  map(~ terra::extract(x = .x, st_transform(viirs, st_crs(rasts))))
+density_df <- tibble(density_2021 = viirs_density[[1]]$V1_length,
+       density_2022 = viirs_density[[2]]$V1_length)
+
 
 bind_together <- function(l){
   nrows <- map_vec(l, nrow)
@@ -97,8 +102,7 @@ bind_together <- function(l){
 }
 extracted_data <- bind_together(list(extracted_rasters, 
                                      extracted_vectors, 
-                                     extracted_viirs_density))
-head(extracted_data)
+                                     density_df))
 
 
 # was VIIRS from wildfire? ------------------------------------------------
@@ -119,8 +123,8 @@ f_wf <- function(viirs_row, wf_row){
   #print(viirs_row)
   # determine if they spatially AND temporally overlap
   SI_wf <- wf_buffer[wf_row,] # spatially intersecting wf
-  viirs_date <- viirs$acq_date[viirs_row]
-  temporal <- (SI_wf$alarm_date <= viirs_date) & (SI_wf$cont_date >= viirs_date)
+  viirs_date <- as.Date(viirs$acq_date[viirs_row])
+  temporal <- (as.Date(SI_wf$alarm_date) <= viirs_date) & (as.Date(SI_wf$cont_date) >= viirs_date)
   if(temporal) tibble(viirs_row = viirs_row, st_drop_geometry(SI_wf))
 }
 
@@ -128,11 +132,13 @@ tictoc::tic()
 wf_res <- map2_df(int_df$viirs_row, int_df$wf_row, f_wf, .progress = T)
 tictoc::toc() #590
 
+
 # i don't care about the name of the fire. just if there was a spatio-temporal match
 # make records for all VIIRS detects too. 
 wf_res_complete <- wf_res %>% 
   filter(!duplicated(viirs_row)) %>% 
   complete(viirs_row = 1:nrow(viirs))
+
 
 
 # merge everything together with VIIRS ------------------------------------
@@ -146,9 +152,43 @@ viirs_everything <- viirs_everything %>%
     CDL == "crop" ~ 'crop',
     CDL == "developed" ~ "developed",
     !is.na(power_source)|!is.na(solar)|!is.na(camping) ~ 'developed', 
-    density > 20 ~ 'stationary',
+    density_2021 | density_2022 > 20 ~ 'stationary',
     T  ~ 'other'
   )) 
 
-expath <- file.path(ref_path, 'viirs/CA_2021_2022')
-st_write(viirs_everything, file.path(expath, 'viirs_extracted.geojson'))
+expath <- file.path(ref_path, 'viirs/CA_2021_2022/viirs_extracted.geojson')
+#if(file_exists(expath)) fs::file_delete(expath)
+  
+st_write(viirs_everything, expath, delete_dsn = T)
+
+
+
+# trash -------------------------------------------------------------------
+
+# 
+# viirs_everything[449416,] #now 461084
+# viirs[449416,]
+# 
+# wf_res_complete[461084,]
+# 
+# viirs %>% 
+#   mutate(id = 1:nrow(.)) %>% 
+#   filter(brightness == 351.86, acq_time == 2148) %>% 
+#   print(width = Inf)
+# nrow(viirs)
+# 
+# 
+# wf %>% filter(fire_name == 'ROBLAR')
+# which(wf$fire_name == 'ROBLAR')
+# wf[655,]
+# keep <- int_df %>% filter(wf_row == 655)
+# viirs[keep$viirs_row,] %>% print(width = Inf)
+# 
+# 
+# mapview::mapview(viirs[keep$viirs_row,] )
+# viirs %>% filter(acq_time == 2148, brightness == 351.86)
+# which(viirs$acq_time == 2148 & viirs$brightness == 351.86)
+# 
+# 
+# viirs_everything %>% filter(acq_time == 2148, brightness == 351.86) %>% 
+#   print(width = Inf)

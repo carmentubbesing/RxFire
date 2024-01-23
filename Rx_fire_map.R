@@ -34,6 +34,18 @@ nei$date <- as.Date(trimws(nei$date),  format = "%Y%m%d") %>%
 nei <- st_transform(nei, use_crs) %>% 
   st_buffer(acres_to_radius(nei$area)) 
 
+# NEI pile burns
+piles <- readxl::read_xlsx(file.path(ref_path, 'US EPA/pile_2022_draft_summary.xlsx'), sheet = 'CA 2022')
+piles <- piles %>% 
+  select(id, sources, event_name, date, acres, type, latitude, longitude) %>% 
+  mutate(date = as.Date(as.character(date), format = '%Y%m%d')) %>% 
+  mutate(geom_id = as.integer(as.factor(paste(latitude, longitude, sep = ','))),
+         .after = id) %>% 
+  st_as_sf(coords = c('longitude', 'latitude'), crs = 4326, remove = F) %>% 
+  st_transform(use_crs) %>% 
+  st_buffer(acres_to_radius(.$acres)) 
+
+
 # PFIRS
 pfirs <- st_read(file.path(ref_path, 'PFIRS/PFIRS_cleaned_2021_2022.geojson'))
 pfirs <- pfirs %>% 
@@ -88,6 +100,24 @@ nei_collapsed <- bind_cols(nei_collapsed,
                              select(nei, geometry)[match(nei_collapsed$geom_id, nei$geom_id),]  
 ) %>% 
   st_as_sf(sf_column_name = 'geometry') %>% arrange(-st_area(.))
+
+
+# pile burns from NEI
+piles_collapsed <- piles %>% 
+  as_tibble %>% 
+  group_by(geom_id) %>% 
+  summarize(dates = paste(date, collapse = ', '),
+            event_names = paste(unique(event_name), collapse = ', '),
+            acres_values = paste(signif(acres, 2), collapse = ', '), 
+            sum_acres = signif(sum(acres), 2), 
+            sources = paste(unique(sources), collapse = ', ')
+  ) 
+# merge back with geometry, make sf
+piles_collapsed <- bind_cols(piles_collapsed, 
+                           select(piles, geometry)[match(piles_collapsed$geom_id, piles$geom_id),]  
+) %>% 
+  st_as_sf(sf_column_name = 'geometry') %>% arrange(-st_area(.))
+
 
 
 
@@ -150,8 +180,8 @@ station_icon <- makeIcon(
 )
 
 # put layers into a list, transform 
-layers <- list(tf_pfirs, tf_nopfirs, nei_collapsed, pfirs_collapsed, stations)
-layer_names <- c('tf_pfirs', 'tf_nopfirs', 'nei', 'pfirs', 'stations')
+layers <- list(tf_pfirs, tf_nopfirs, nei_collapsed, piles_collapsed, pfirs_collapsed, stations)
+layer_names <- c('tf_pfirs', 'tf_nopfirs', 'nei', 'nei_piles', 'pfirs', 'stations')
 names(layers) <- layer_names
 layers <- map(layers, ~ st_transform(.x, 4326), .progress = T)
 layers <- map(layers, st_make_valid, .progress = T)
@@ -170,8 +200,8 @@ rasts_crop <- crop(rasts, districts[districts$NAME == 'Bay Area',] %>%
 harrypotter::hp_palettes
 plot_pal(harrypotter::harrypotter(4, option = 'ronweasley2'))
 viirs_pal <- colorFactor(c( '#5BBCD6', '#FF0000', '#2ECC71', 'black', 'black'), viirs$category)
-layers_pal <- colorFactor(harrypotter::harrypotter(4, option = 'ronweasley2'), layer_names[1:4])
-layer_labels <- c("NEI (2022 only)", "PFIRS", "Task Force (non-PFIRS)", "Task Force (PFIRS)")
+layers_pal <- colorFactor(harrypotter::harrypotter(5, option = 'ronweasley2'), layer_names[1:5])
+layer_labels <- c("NEI (2022 only)", "NEI piles (2022 only)", "PFIRS", "Task Force (non-PFIRS)", "Task Force (PFIRS)")
 raster_labels <- levels(rasts$CDL)[[1]][,2]
 rast_pal <- colorFactor(c('green4', '#A569BD', '#F7DC6F', '#D6EAF8'), values(rasts$CDL))
 raster_labels2 <- levels(rasts$SRA)[[1]][,2]
@@ -193,9 +223,19 @@ map_this_bad_boy <- function(layers, rasters, viirs){
     addPolygons(data = layers$nei, group = 'NEI', 
                 color = layers_pal('nei'), fillOpacity = .2,
                 popup = ~ paste("<b>dataset:</b> ", "NEI", "<br>",
-                                "<b>id:</b> ", geom_id, "<br>",
+                                "<b>geom_id:</b> ", geom_id, "<br>",
                                 "<b>Rx fire:</b> ", rx, "<br>",
                                 '<b>event name:</b> ', event_name, "<br>",
+                                '<b>dates:</b> ', dates, "<br>",
+                                '<b>acres:</b> ', acres_values, "<br>",
+                                '<b>sources:</b> ', sources, "<br>"),
+                highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
+                                                    bringToFront = F)) %>% 
+    addPolygons(data = layers$nei_piles, group = 'NEI piles', 
+                color = layers_pal('nei_piles'), fillOpacity = .2,
+                popup = ~ paste("<b>dataset:</b> ", "NEI piles", "<br>",
+                                "<b>geom_id:</b> ", geom_id, "<br>",
+                                '<b>event name:</b> ', event_names, "<br>",
                                 '<b>dates:</b> ', dates, "<br>",
                                 '<b>acres:</b> ', acres_values, "<br>",
                                 '<b>sources:</b> ', sources, "<br>"),
@@ -236,7 +276,7 @@ map_this_bad_boy <- function(layers, rasters, viirs){
                 highlightOptions = highlightOptions(color = "turquoise", weight = 4, 
                                                     bringToFront = F)) %>% 
     # add legend
-    addLegend(pal = layers_pal, values= layer_names[1:4], 
+    addLegend(pal = layers_pal, values= layer_names[1:5], 
               labFormat = function(type, cuts) paste0(layer_labels),
               opacity = 1,
               title = 'Rx fire layers', position = 'bottomleft') 
@@ -271,8 +311,11 @@ map_this_bad_boy <- function(layers, rasters, viirs){
   # add viirs to it
   map_all <- map_raster %>% 
     addCircleMarkers(data = viirs, group = 'VIIRS', 
-                     color = ~ viirs_pal(category), stroke = F, 
-                     radius = 5, fillOpacity = .7, 
+                     #color = ~ viirs_pal(category), stroke = F, 
+                     radius = 5, 
+                     fillColor = ~ viirs_pal(category),
+                     fillOpacity = .7,
+                     color = 'white', opacity = .7, weight = 2,
                      popup = ~ paste("<b>dataset:</b> ", "VIIRS", "<br>",
                                      "<b>viirs_id:</b> ", viirs_id, "<br>",
                                      "<b>tf_id:</b> ", tf_id, "<br>",
@@ -285,7 +328,7 @@ map_this_bad_boy <- function(layers, rasters, viirs){
               title = 'VIIRS', position = 'bottomleft') %>%
     addLayersControl(
       baseGroups = c("street", "satellite", "topo"), 
-      overlayGroups = c('Land Type', 'Land Ownership', 'stations', 'PFIRS', "Task Force (non-PFIRS)", "Task Force (PFIRS)", 'NEI', 'VIIRS'),
+      overlayGroups = c('Land Type', 'Land Ownership', 'stations', 'PFIRS', "Task Force (non-PFIRS)", "Task Force (PFIRS)", 'NEI', "NEI piles", 'VIIRS'),
       options = layersControlOptions(collapsed = T) 
     ) %>% 
     # add scale bar
@@ -296,6 +339,7 @@ map_this_bad_boy <- function(layers, rasters, viirs){
   return(map_all)
 }
 
+
 smaller_map <- map_this_bad_boy(layers_filt, rasts_crop, viirs_filt)
 smaller_map 
 big_map <- map_this_bad_boy(layers, rasts, viirs)
@@ -305,7 +349,7 @@ big_map
 
 # export things -----------------------------------------------------------
 # save map
-expath_map <- file.path(shared_path, 'Lisa_VIIRS_vs_RxFire/mapleaflet_all_data_2021_2022.html')
+expath_map <- file.path(shared_path, 'Lisa_VIIRS_vs_RxFire/mapleaflet_all_data_2021_2022_update.html')
 mapshot(big_map, expath_map)
 
 # save datasets
@@ -317,3 +361,16 @@ export_viirs <- st_read(file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_
   as_tibble()
 export_viirs %>% 
   write_csv(file.path(shared_path, 'Lisa_VIIRS_vs_RxFire/datasets/viirs_with_tf_pfirs_matches_2021_2022.csv'))
+
+
+
+
+leaflet() %>% 
+  addCircleMarkers(data = viirs_filt, group = 'VIIRS',
+                   fillColor = ~ viirs_pal(category),
+                   fillOpacity = 1, 
+                   color = 'white', opacity = 1, weight = 2)
+
+
+
+viirs$camping %>% table

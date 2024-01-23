@@ -26,7 +26,7 @@ pfirs_filt <- pfirs_filt %>%
 # import VIIRS
 viirs_path <- file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_extracted.geojson')
 viirs <- st_read(viirs_path)
-viirs <- viirs[st_transform(CA, 4326),]
+viirs <- viirs[st_transform(CA, 4326),] #removes non-CA points. 
 
 # make viirs time PST
 viirs <- viirs %>% 
@@ -42,6 +42,11 @@ viirs_nonwf <- viirs %>%
   filter(category != 'wildfire') %>% 
   st_transform(use_crs) %>% 
   st_buffer(375/2)
+
+
+# there are a few viirs points in wf that weren't removed. figure that out.
+viirs %>% 
+  filter(viirs_id %in% c(236273, 449416, 236345))
 
 
 # find spatiotemporal overlap with VIIRS ----------------------------------
@@ -72,7 +77,6 @@ viirs_matches <- full_join(priortize_spatiotemporal(tf_match),
 
 
 
-
 # export things -----------------------------------------------------------
 
 # the matches
@@ -88,7 +92,7 @@ write_csv(pfirs_match, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_pfirs_match
 
 # update categories
 viirs_categories <- st_drop_geometry(viirs) %>% 
-  select(viirs_id, fire_name, CDL, power_source, solar, camping, density, datetime, category)
+  select(viirs_id, fire_name, CDL, power_source, landfill_nm, solar, camping, density_2021, density_2022, datetime, category)
 category_tf <- viirs_categories %>% 
   left_join(priortize_spatiotemporal(tf_match)) %>% 
   update_category %>%
@@ -112,10 +116,6 @@ res <- viirs %>%
 
 
 st_write(res, file.path(ref_path, 'VIIRS/CA_2021_2022/viirs_taskforce_pfirs.geojson'), delete_dsn = T)
-
-
-
-
 
 
 
